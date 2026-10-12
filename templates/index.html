@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POD Extractor — Proof of Delivery OCR</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0f1117;
+            --bg-surface: #181b24;
+            --bg-elevated: #202431;
+            --border-subtle: #2b3144;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --text-dim: #64748b;
+            --accent: #4f8ef7;
+            --success: #3ecf8e;
+            --warning: #f5a623;
+            --error: #f25c5c;
+            --font-ui: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-mono: 'IBM Plex Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-ui);
+            line-height: 1.5;
+            min-height: 100vh;
+            padding: 24px 16px;
+        }
+
+        .container {
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 24px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-mark {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), #2b6cb0);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            font-size: 14px;
+            color: #ffffff;
+            letter-spacing: -0.5px;
+        }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-surface);
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border-subtle);
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--success);
+            box-shadow: 0 0 0 0 rgba(62, 207, 142, 0.7);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(62, 207, 142, 0.7);
+            }
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 6px rgba(62, 207, 142, 0);
+            }
+            100% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(62, 207, 142, 0);
+            }
+        }
+
+        /* Upload Zone */
+        .upload-section {
+            background: var(--bg-surface);
+            border-radius: 8px;
+            border: 1px solid var(--border-subtle);
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border-subtle);
+            border-radius: 6px;
+            padding: 36px 20px;
+            text-align: center;
+            cursor: pointer;
+            background: var(--bg-base);
+        }
+
+        .drop-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(79, 142, 247, 0.05);
+        }
+
+        .drop-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+
+        .drop-text-primary {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .drop-text-secondary {
+            font-size: 13px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        .file-info {
+            display: none;
+            margin-top: 14px;
+            padding: 10px 14px;
+            background: var(--bg-elevated);
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            color: var(--accent);
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .actions-row {
+            margin-top: 16px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .btn-submit {
+            background: var(--accent);
+            color: #ffffff;
+            border: none;
+            padding: 10px 22px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: var(--font-ui);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-submit:disabled {
+            background: var(--border-subtle);
+            color: var(--text-dim);
+            cursor: not-allowed;
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            display: none;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Error Box */
+        .error-box {
+            display: none;
+            background: rgba(242, 92, 92, 0.1);
+            border: 1px solid var(--error);
+            border-radius: 6px;
+            padding: 14px 18px;
+            color: var(--error);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            margin-bottom: 24px;
+        }
+
+        /* Results Tabs */
+        .results-section {
+            display: none;
+        }
+
+        .tabs-nav {
+            display: flex;
+            gap: 6px;
+            border-bottom: 1px solid var(--border-subtle);
+            margin-bottom: 20px;
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 10px 16px;
+            font-family: var(--font-ui);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .tab-btn.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        .tab-pane {
+            display: none;
+        }
+
+        .tab-pane.active {
+            display: block;
+        }
+
+        /* Meta Badges Row */
+        .meta-badges-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .meta-badge {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .badge-tag {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .tag-success { background: rgba(62, 207, 142, 0.15); color: var(--success); }
+        .tag-warning { background: rgba(245, 166, 35, 0.15); color: var(--warning); }
+        .tag-error { background: rgba(242, 92, 92, 0.15); color: var(--error); }
+        .tag-accent { background: rgba(79, 142, 247, 0.15); color: var(--accent); }
+        .tag-muted { background: var(--border-subtle); color: var(--text-muted); }
+
+        /* Field Cards Grid */
+        .fields-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .fields-grid { grid-template-columns: 1fr; }
+        }
+
+        .field-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            min-height: 100px;
+        }
+
+        .field-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .field-label {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .field-value {
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--success);
+            word-break: break-word;
+        }
+
+        .field-value.is-null {
+            color: var(--text-dim);
+            font-style: italic;
+            font-size: 14px;
+            font-weight: 400;
+        }
+
+        .field-footer {
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .review-badge {
+            background: rgba(245, 166, 35, 0.2);
+            color: var(--warning);
+            border: 1px solid var(--warning);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        .exception-badge {
+            background: rgba(242, 92, 92, 0.2);
+            color: var(--error);
+            border: 1px solid var(--error);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        /* JSON Code Viewer */
+        .json-viewer-box {
+            background: var(--bg-base);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 16px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            overflow-x: auto;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.6;
+        }
+
+        /* Viewer Toolbar & Copy Buttons */
+        .viewer-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-subtle);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .btn-copy {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-main);
+            padding: 6px 12px;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-copy:hover {
+            border-color: var(--accent);
+            color: #ffffff;
+            background: rgba(79, 142, 247, 0.1);
+        }
+
+        .btn-copy.copied {
+            border-color: var(--success);
+            color: var(--success);
+            background: rgba(62, 207, 142, 0.1);
+        }
+
+        /* Sequential Text Lines List */
+        .text-lines-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 380px;
+            overflow-y: auto;
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 12px;
+            background: var(--bg-base);
+        }
+
+        .text-line-item {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            padding: 6px 10px;
+            border-radius: 4px;
+            background: var(--bg-surface);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            font-size: 13px;
+        }
+
+        .text-line-item:hover {
+            border-color: rgba(79, 142, 247, 0.3);
+        }
+
+        .line-idx {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            min-width: 28px;
+            user-select: none;
+        }
+
+        .line-content {
+            font-family: var(--font-mono);
+            color: #e2e8f0;
+            word-break: break-word;
+        }
+
+        /* Syntax Highlighting */
+        .hl-key { color: #7dd3fc; }
+        .hl-str { color: #86efac; }
+        .hl-num { color: #fca5a5; }
+        .hl-bool { color: #f5a623; }
+        .hl-null { color: var(--text-dim); font-style: italic; }
+
+        /* Tab 2: Document Quality */
+        .quality-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .recommendation-banner {
+            background: rgba(79, 142, 247, 0.1);
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            padding: 16px;
+            margin-bottom: 20px;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            color: #ffffff;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        .stat-card {
+            background: var(--bg-base);
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            padding: 14px;
+        }
+
+        .stat-label {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .stat-value {
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .stamp-list {
+            list-style: none;
+            margin-top: 10px;
+        }
+
+        .stamp-item {
+            background: var(--bg-base);
+            border: 1px solid var(--border-subtle);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-main);
+            margin-bottom: 6px;
+        }
+
+        /* Tab 4: OCR Blocks Table */
+        .table-container {
+            border: 1px solid var(--border-subtle);
+            border-radius: 6px;
+            overflow-y: auto;
+            max-height: 400px;
+            background: var(--bg-surface);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            font-family: var(--font-mono);
+            text-align: left;
+        }
+
+        th {
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            font-weight: 600;
+            padding: 10px 14px;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-main);
+        }
+
+        .conf-cell {
+            min-width: 120px;
+        }
+
+        .conf-bar-bg {
+            background: var(--bg-base);
+            height: 4px;
+            border-radius: 2px;
+            margin-top: 4px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .conf-bar-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="brand">
+                <div class="logo-mark">POD</div>
+                <h1>POD Extractor</h1>
+            </div>
+            <div class="status-badge">
+                <span class="status-dot" id="systemDot"></span>
+                <span id="systemText">Engine Ready</span>
+            </div>
+        </header>
+
+        <!-- Upload Form -->
+        <section class="upload-section">
+            <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.pdf,.webp" style="display: none;">
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-icon">⤓</div>
+                <div class="drop-text-primary">Drag & drop document here, or click to browse</div>
+                <div class="drop-text-secondary">Supported formats: JPG, PNG, PDF, WEBP</div>
+            </div>
+
+            <div class="file-info" id="fileInfo">
+                <span id="fileNameDisplay">document.pdf</span>
+                <span style="cursor: pointer; color: var(--text-dim);" id="fileRemoveBtn">✕</span>
+            </div>
+
+            <div class="actions-row">
+                <button type="button" class="btn-submit" id="submitBtn" disabled>
+                    <span class="spinner" id="btnSpinner"></span>
+                    <span id="btnText">Extract Data</span>
+                </button>
+            </div>
+        </section>
+
+        <!-- Error Notification -->
+        <div class="error-box" id="errorBox"></div>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection">
+            <!-- Tabs Nav -->
+            <div class="tabs-nav">
+                <button class="tab-btn active" data-tab="tab-texts">Identified Texts (JSON)</button>
+                <button class="tab-btn" data-tab="tab1">Structured Output</button>
+                <button class="tab-btn" data-tab="tab2">Document Quality</button>
+                <button class="tab-btn" data-tab="tab3">Full OCR JSON</button>
+                <button class="tab-btn" data-tab="tab4">OCR Blocks</button>
+            </div>
+
+            <!-- Tab 0: Identified Texts (Pure JSON) -->
+            <div class="tab-pane active" id="tab-texts">
+                <div class="viewer-toolbar">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 13px; font-weight: 600; color: #ffffff;">Identified Texts JSON</span>
+                        <span id="textCountBadge" class="badge-tag tag-accent">0 lines</span>
+                        <span style="font-size: 12px; color: var(--text-dim); font-family: var(--font-mono);">(Pure texts array, no bounding boxes or scores)</span>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        <button type="button" class="btn-copy" id="copyTextsBtn">📋 Copy JSON</button>
+                        <button type="button" class="btn-copy" id="downloadTextsBtn">💾 Download .json</button>
+                    </div>
+                </div>
+                <div class="json-viewer-box" id="textsJsonViewer" style="max-height: 480px;"></div>
+
+                <div style="margin-top: 20px;">
+                    <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 8px;">
+                        Extracted Lines (One by One)
+                    </div>
+                    <ul class="text-lines-list" id="textLinesList"></ul>
+                </div>
+            </div>
+
+            <!-- Tab 1: Structured Output -->
+            <div class="tab-pane" id="tab1">
+                <div class="meta-badges-row" id="metaBadgesRow"></div>
+                <div class="fields-grid" id="fieldsGrid"></div>
+                <div style="margin-top: 10px; margin-bottom: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--text-dim); text-transform: uppercase;">
+                    Structured Payload JSON
+                </div>
+                <div class="json-viewer-box" id="structuredJsonViewer"></div>
+            </div>
+
+            <!-- Tab 2: Document Quality -->
+            <div class="tab-pane" id="tab2">
+                <div class="recommendation-banner" id="recommendationBanner"></div>
+                <div class="stats-grid" id="statsGrid"></div>
+                <div class="quality-card">
+                    <div class="stat-label">Detected Stamp Texts</div>
+                    <ul class="stamp-list" id="stampList"></ul>
+                </div>
+            </div>
+
+            <!-- Tab 3: Full OCR JSON -->
+            <div class="tab-pane" id="tab3">
+                <div class="json-viewer-box" id="fullJsonViewer"></div>
+            </div>
+
+            <!-- Tab 4: OCR Blocks -->
+            <div class="tab-pane" id="tab4">
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th style="width: 50px;">#</th>
+                                <th>Extracted Text</th>
+                                <th style="width: 140px;">Confidence</th>
+                                <th style="width: 160px;">Method</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ocrBlocksTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        (function() {
+            // UI elements
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+            const fileInfo = document.getElementById('fileInfo');
+            const fileNameDisplay = document.getElementById('fileNameDisplay');
+            const fileRemoveBtn = document.getElementById('fileRemoveBtn');
+            const submitBtn = document.getElementById('submitBtn');
+            const btnSpinner = document.getElementById('btnSpinner');
+            const btnText = document.getElementById('btnText');
+            const errorBox = document.getElementById('errorBox');
+            const resultsSection = document.getElementById('resultsSection');
+            const systemDot = document.getElementById('systemDot');
+            const systemText = document.getElementById('systemText');
+
+            let selectedFile = null;
+
+            // Health check on load
+            fetch('/health')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'running') {
+                        systemText.textContent = data.paddle ? 'PaddleOCR Active' : 'System Ready';
+                    }
+                })
+                .catch(() => {
+                    systemDot.style.backgroundColor = 'var(--warning)';
+                    systemText.textContent = 'Server Connected';
+                });
+
+            // Drag and drop event handlers
+            ['dragenter', 'dragover'].forEach(event => {
+                dropZone.addEventListener(event, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropZone.classList.add('dragover');
+                });
+            });
+
+            ['dragleave', 'drop'].forEach(event => {
+                dropZone.addEventListener(event, (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropZone.classList.remove('dragover');
+                });
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    handleFileSelection(e.dataTransfer.files[0]);
+                }
+            });
+
+            dropZone.addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            fileInput.addEventListener('change', () => {
+                if (fileInput.files && fileInput.files.length > 0) {
+                    handleFileSelection(fileInput.files[0]);
+                }
+            });
+
+            fileRemoveBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                resetFileSelection();
+            });
+
+            function handleFileSelection(file) {
+                selectedFile = file;
+                fileNameDisplay.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+                fileInfo.style.display = 'flex';
+                submitBtn.disabled = false;
+                errorBox.style.display = 'none';
+            }
+
+            function resetFileSelection() {
+                selectedFile = null;
+                fileInput.value = '';
+                fileInfo.style.display = 'none';
+                submitBtn.disabled = true;
+            }
+
+            // Tab Switching
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            tabButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    tabButtons.forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+
+                    btn.classList.add('active');
+                    const targetId = btn.getAttribute('data-tab');
+                    document.getElementById(targetId).classList.add('active');
+                });
+            });
+
+            // Submit Handler
+            submitBtn.addEventListener('click', () => {
+                if (!selectedFile) return;
+
+                errorBox.style.display = 'none';
+                submitBtn.disabled = true;
+                btnSpinner.style.display = 'inline-block';
+                btnText.textContent = 'Extracting...';
+
+                const formData = new FormData();
+                formData.append('file', selectedFile);
+
+                fetch('/extract', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(async response => {
+                    const data = await response.json();
+                    if (!response.ok || data.status === 'error') {
+                        throw new Error(data.error || `HTTP error ${response.status}`);
+                    }
+                    return data;
+                })
+                .then(data => {
+                    renderResults(data);
+                    resultsSection.style.display = 'block';
+                })
+                .catch(err => {
+                    errorBox.textContent = 'Extraction Error: ' + err.message;
+                    errorBox.style.display = 'block';
+                })
+                .finally(() => {
+                    submitBtn.disabled = false;
+                    btnSpinner.style.display = 'none';
+                    btnText.textContent = 'Extract Data';
+                });
+            });
+
+            // Active Extracted Texts Cache
+            let currentExtractedTexts = [];
+
+            function escapeHtml(str) {
+                if (!str) return '';
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+            }
+
+            // Copy & Download Pure Text JSON Buttons
+            const copyTextsBtn = document.getElementById('copyTextsBtn');
+            const downloadTextsBtn = document.getElementById('downloadTextsBtn');
+
+            if (copyTextsBtn) {
+                copyTextsBtn.addEventListener('click', () => {
+                    const jsonStr = JSON.stringify(currentExtractedTexts, null, 2);
+                    navigator.clipboard.writeText(jsonStr).then(() => {
+                        const originalHtml = copyTextsBtn.innerHTML;
+                        copyTextsBtn.innerHTML = '✓ Copied!';
+                        copyTextsBtn.classList.add('copied');
+                        setTimeout(() => {
+                            copyTextsBtn.innerHTML = originalHtml;
+                            copyTextsBtn.classList.remove('copied');
+                        }, 2000);
+                    }).catch(() => {
+                        alert('Could not copy to clipboard.');
+                    });
+                });
+            }
+
+            if (downloadTextsBtn) {
+                downloadTextsBtn.addEventListener('click', () => {
+                    const jsonStr = JSON.stringify(currentExtractedTexts, null, 2);
+                    const blob = new Blob([jsonStr], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `extracted_texts_${Date.now()}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                });
+            }
+
+            // Syntax Highlighting
+            function syntaxHighlight(jsonObj) {
+                let json = JSON.stringify(jsonObj, null, 2);
+                json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+                    let cls = 'hl-num';
+                    if (/^"/.test(match)) {
+                        if (/:$/.test(match)) {
+                            cls = 'hl-key';
+                        } else {
+                            cls = 'hl-str';
+                        }
+                    } else if (/true|false/.test(match)) {
+                        cls = 'hl-bool';
+                    } else if (/null/.test(match)) {
+                        cls = 'hl-null';
+                    }
+                    return '<span class="' + cls + '">' + match + '</span>';
+                });
+            }
+
+            // Results Renderer
+            function renderResults(res) {
+                const fullOcr = res.full_ocr || {};
+                const fields = res.structured_fields || {};
+                const quality = res.document_quality || {};
+                const classification = res.document_classification || {};
+
+                // --- TAB 0: Pure Extracted Texts JSON (No bboxes, no scores) ---
+                currentExtractedTexts = res.extracted_texts || [];
+                const textsJsonViewer = document.getElementById('textsJsonViewer');
+                if (textsJsonViewer) {
+                    textsJsonViewer.innerHTML = syntaxHighlight(currentExtractedTexts);
+                }
+                const textCountBadge = document.getElementById('textCountBadge');
+                if (textCountBadge) {
+                    textCountBadge.textContent = `${currentExtractedTexts.length} lines`;
+                }
+
+                const textLinesList = document.getElementById('textLinesList');
+                if (textLinesList) {
+                    textLinesList.innerHTML = '';
+                    if (currentExtractedTexts.length === 0) {
+                        const li = document.createElement('li');
+                        li.className = 'text-line-item';
+                        li.style.color = 'var(--text-dim)';
+                        li.textContent = 'No text lines detected in document.';
+                        textLinesList.appendChild(li);
+                    } else {
+                        currentExtractedTexts.forEach((txt, idx) => {
+                            const li = document.createElement('li');
+                            li.className = 'text-line-item';
+                            li.innerHTML = `<span class="line-idx">${idx + 1}.</span><span class="line-content">${escapeHtml(txt)}</span>`;
+                            textLinesList.appendChild(li);
+                        });
+                    }
+                }
+
+                // --- TAB 1: Meta Badges ---
+                const metaBadgesRow = document.getElementById('metaBadgesRow');
+                metaBadgesRow.innerHTML = '';
+
+                const docTypeBadgeClass = classification.is_delivery_document ? 'tag-success' : 'tag-warning';
+                const docTypeLabel = classification.is_delivery_document ? 'DELIVERY DOC' : 'NON-DELIVERY';
+
+                let qualityBadgeClass = 'tag-success';
+                if (quality.quality_tier === 'DEGRADED') qualityBadgeClass = 'tag-warning';
+                if (quality.quality_tier === 'POOR') qualityBadgeClass = 'tag-error';
+
+                const badges = [
+                    { label: 'ENGINE', val: fullOcr.ocr_engine || 'PaddleOCR', cls: 'tag-accent' },
+                    { label: 'CONFIDENCE', val: `${((fullOcr.mean_confidence || 0) * 100).toFixed(1)}%`, cls: 'tag-accent' },
+                    { label: 'DOC TYPE', val: docTypeLabel, cls: docTypeBadgeClass },
+                    { label: 'TIER', val: quality.quality_tier || 'UNKNOWN', cls: qualityBadgeClass },
+                    { label: 'BLOCKS', val: fullOcr.total_blocks || 0, cls: 'tag-muted' }
+                ];
+
+                badges.forEach(b => {
+                    const el = document.createElement('div');
+                    el.className = 'meta-badge';
+                    el.innerHTML = `${b.label}: <span class="badge-tag ${b.cls}">${b.val}</span>`;
+                    metaBadgesRow.appendChild(el);
+                });
+
+                // --- TAB 1: Field Cards ---
+                const fieldsGrid = document.getElementById('fieldsGrid');
+                fieldsGrid.innerHTML = '';
+
+                const fieldKeys = [
+                    'pod_number',
+                    'delivery_date',
+                    'vehicle_number',
+                    'customer_name',
+                    'receiver_name',
+                    'quantity',
+                    'remarks'
+                ];
+
+                fieldKeys.forEach(key => {
+                    const f = fields[key] || { value: null, confidence: null, method: 'NOT_FOUND', needs_review: true };
+                    const card = document.createElement('div');
+                    card.className = 'field-card';
+
+                    const header = document.createElement('div');
+                    header.className = 'field-card-header';
+                    header.innerHTML = `<span class="field-label">${key.replace('_', ' ')}</span>`;
+
+                    if (f.needs_review) {
+                        const rBadge = document.createElement('span');
+                        rBadge.className = 'review-badge';
+                        rBadge.textContent = 'REVIEW';
+                        header.appendChild(rBadge);
+                    }
+
+                    const valEl = document.createElement('div');
+                    if (f.value !== null && f.value !== undefined && f.value !== '') {
+                        valEl.className = 'field-value';
+                        valEl.textContent = f.value;
+                    } else {
+                        valEl.className = 'field-value is-null';
+                        valEl.textContent = 'null — not found';
+                    }
+
+                    const footer = document.createElement('div');
+                    footer.className = 'field-footer';
+
+                    if (f.confidence) {
+                        let confCls = 'tag-success';
+                        if (f.confidence === 'MEDIUM') confCls = 'tag-warning';
+                        if (f.confidence === 'LOW') confCls = 'tag-error';
+                        footer.innerHTML += `<span class="badge-tag ${confCls}">${f.confidence}</span>`;
+                    }
+
+                    if (f.method && f.method !== 'NOT_FOUND') {
+                        footer.innerHTML += `<span class="badge-tag tag-muted">${f.method}</span>`;
+                    }
+
+                    if (f.exception_keywords && f.exception_keywords.length > 0) {
+                        footer.innerHTML += `<span class="exception-badge">⚠️ ${f.exception_keywords.join(', ')}</span>`;
+                    }
+
+                    card.appendChild(header);
+                    card.appendChild(valEl);
+                    card.appendChild(footer);
+                    fieldsGrid.appendChild(card);
+                });
+
+                // Tab 1 JSON
+                document.getElementById('structuredJsonViewer').innerHTML = syntaxHighlight(fields);
+
+                // --- TAB 2: Document Quality ---
+                const recBanner = document.getElementById('recommendationBanner');
+                recBanner.innerHTML = `<strong>RECOMMENDATION:</strong> ${quality.recommendation || 'N/A'}`;
+
+                const statsGrid = document.getElementById('statsGrid');
+                statsGrid.innerHTML = '';
+
+                const qStats = [
+                    { label: 'Quality Tier', val: quality.quality_tier || 'N/A' },
+                    { label: 'Mean Confidence', val: `${((quality.mean_confidence || 0) * 100).toFixed(1)}%` },
+                    { label: 'Rotation Corrected', val: quality.rotation_corrected ? `Yes (${quality.rotation_angle}°)` : 'No' },
+                    { label: 'Stamp Detected', val: quality.stamp_detected ? `Yes (${quality.stamp_count})` : 'No' },
+                    { label: 'Low Conf Blocks', val: quality.low_confidence_blocks || 0 },
+                    { label: 'TrOCR Fallbacks', val: quality.trocr_fallback_count || 0 }
+                ];
+
+                qStats.forEach(st => {
+                    const card = document.createElement('div');
+                    card.className = 'stat-card';
+                    card.innerHTML = `<div class="stat-label">${st.label}</div><div class="stat-value">${st.val}</div>`;
+                    statsGrid.appendChild(card);
+                });
+
+                const stampList = document.getElementById('stampList');
+                stampList.innerHTML = '';
+                const stampTexts = fullOcr.stamp_texts || [];
+                if (stampTexts.length > 0) {
+                    stampTexts.forEach(txt => {
+                        const li = document.createElement('li');
+                        li.className = 'stamp-item';
+                        li.textContent = txt || '(Unrecognized stamp text)';
+                        stampList.appendChild(li);
+                    });
+                } else {
+                    const li = document.createElement('li');
+                    li.className = 'stamp-item';
+                    li.style.color = 'var(--text-dim)';
+                    li.textContent = 'No stamps isolated or recognized';
+                    stampList.appendChild(li);
+                }
+
+                // --- TAB 3: Full OCR JSON ---
+                document.getElementById('fullJsonViewer').innerHTML = syntaxHighlight(res);
+
+                // --- TAB 4: OCR Blocks Table ---
+                const tbody = document.getElementById('ocrBlocksTableBody');
+                tbody.innerHTML = '';
+                const blocks = fullOcr.ocr_blocks || [];
+
+                blocks.forEach((blk, idx) => {
+                    const tr = document.createElement('tr');
+                    const conf = blk.confidence || 0;
+                    const confPct = (conf * 100).toFixed(1);
+                    const isTrocr = blk.method === 'TROCR_FALLBACK';
+                    const methodBadge = isTrocr
+                        ? '<span class="badge-tag tag-warning">TROCR_FALLBACK</span>'
+                        : '<span class="badge-tag tag-accent">PADDLE_CRNN</span>';
+
+                    tr.innerHTML = `
+                        <td style="color: var(--text-dim);">${idx + 1}</td>
+                        <td style="font-weight: 500;">${blk.text || ''}</td>
+                        <td class="conf-cell">
+                            <div>${confPct}%</div>
+                            <div class="conf-bar-bg">
+                                <div class="conf-bar-fill" style="width: ${confPct}%; background: ${conf < 0.75 ? 'var(--warning)' : 'var(--accent)'};"></div>
+                            </div>
+                        </td>
+                        <td>${methodBadge}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        })();
+    </script>
+</body>
+</html>
