@@ -228,11 +228,16 @@ def extract():
 
 
 if __name__ == "__main__":
-    # Pre-warm PaddleOCR engine once at process startup to prevent request race conditions
+    # Pre-warm PaddleOCR and TrOCR engines once at process startup
     try:
         ocr.OCREngine.get_paddle()
     except Exception as e:
         print(f"PaddleOCR warmup notice: {e}")
+
+    try:
+        ocr.OCREngine.get_trocr()
+    except Exception as e:
+        print(f"TrOCR warmup notice: {e}")
 
     port = int(os.environ.get("PORT", 5000))
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1")
