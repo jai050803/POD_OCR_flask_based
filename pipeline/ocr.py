@@ -16,6 +16,22 @@ from PIL import Image
 # Ensure PaddlePaddle oneDNN flags are set for CPU inference stability
 os.environ["FLAGS_use_mkldnn"] = "0"
 os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+os.environ["PADDLE_PDX_EAGER_INIT"] = "0"
+
+# Make PaddleX initialization idempotent to prevent 'PDX has already been initialized' crash
+try:
+    import paddlex.repo_manager.core as pdx_core
+
+    _orig_pdx_initialize = pdx_core.initialize
+
+    def _safe_pdx_initialize(*args, **kwargs):
+        if pdx_core._GlobalContext.is_initialized():
+            return
+        return _orig_pdx_initialize(*args, **kwargs)
+
+    pdx_core.initialize = _safe_pdx_initialize
+except Exception:
+    pass
 
 
 class OCREngine:
@@ -67,29 +83,41 @@ class OCREngine:
         return cls._trocr_processor, cls._trocr_model
 
 
-def run_trocr_on_crop(pil_crop: Image.Image) -> str:
-    """Run TrOCR on a single text line crop.
+def run_trocr_batch(pil_crops: List[Image.Image]) -> List[str]:
+    """Run TrOCR on a batch of text line crops using torch.inference_mode.
 
     Args:
-        pil_crop: A PIL Image crop containing handwritten or low-confidence text.
+        pil_crops: List of PIL Image crops containing handwritten/low-confidence text.
 
     Returns:
-        Recognized string, or empty string if TrOCR is unavailable or recognition fails.
+        List of recognized text strings.
     """
+    if not pil_crops:
+        return []
+
     processor, model = OCREngine.get_trocr()
     if processor is None or model is None:
-        return ""
+        return ["" for _ in pil_crops]
 
     try:
-        rgb_crop = pil_crop.convert("RGB")
-        pixel_values = processor(images=rgb_crop, return_tensors="pt").pixel_values
-        generated_ids = model.generate(pixel_values)
-        recognized_text = processor.batch_decode(
+        import torch
+
+        rgb_crops = [c.convert("RGB") for c in pil_crops]
+        inputs = processor(images=rgb_crops, return_tensors="pt")
+        with torch.inference_mode():
+            generated_ids = model.generate(inputs.pixel_values, max_new_tokens=18)
+        recognized_texts = processor.batch_decode(
             generated_ids, skip_special_tokens=True
-        )[0]
-        return recognized_text.strip()
+        )
+        return [t.strip() for t in recognized_texts]
     except Exception:
-        return ""
+        return ["" for _ in pil_crops]
+
+
+def run_trocr_on_crop(pil_crop: Image.Image) -> str:
+    """Run TrOCR on a single text line crop."""
+    results = run_trocr_batch([pil_crop])
+    return results[0] if results else ""
 
 
 def _parse_paddle_raw(ocr_output: Any) -> List[Dict[str, Any]]:
@@ -185,21 +213,33 @@ def extract_text(pil_image: Image.Image) -> Dict[str, Any]:
     blocks = _parse_paddle_raw(raw_output)
     trocr_used = False
 
-    # Tier 2: TrOCR fallback for low-confidence blocks
-    for block in blocks:
-        if block["confidence"] < 0.75:
+    # Tier 2: TrOCR fallback for low-confidence blocks (batched for speed)
+    candidates = []
+    for idx, block in enumerate(blocks):
+        clean_t = block["text"].strip()
+        if block["confidence"] < 0.72 and len(clean_t) > 1:
+            candidates.append((idx, block))
+
+    # Cap to max 6 lowest-confidence candidates to prevent CPU inference lag
+    candidates.sort(key=lambda x: x[1]["confidence"])
+    candidates = candidates[:6]
+
+    if candidates:
+        crops = []
+        for _, block in candidates:
             xs = [pt[0] for pt in block["bbox"]]
             ys = [pt[1] for pt in block["bbox"]]
             crop_x1 = max(0, min(xs) - 4)
             crop_y1 = max(0, min(ys) - 4)
             crop_x2 = min(w_img, max(xs) + 4)
             crop_y2 = min(h_img, max(ys) + 4)
+            crops.append(img_rgb.crop((crop_x1, crop_y1, crop_x2, crop_y2)))
 
-            crop = img_rgb.crop((crop_x1, crop_y1, crop_x2, crop_y2))
-            trocr_result = run_trocr_on_crop(crop)
+        trocr_results = run_trocr_batch(crops)
 
-            if trocr_result:
-                block["text"] = trocr_result
+        for (b_idx, block), trocr_text in zip(candidates, trocr_results):
+            if trocr_text and any(c.isalnum() for c in trocr_text):
+                block["text"] = trocr_text
                 block["method"] = "TROCR_FALLBACK"
                 trocr_used = True
 
@@ -219,48 +259,3 @@ def extract_text(pil_image: Image.Image) -> Dict[str, Any]:
         "total_blocks": len(blocks),
         "trocr_used": trocr_used,
     }
-
-
-def ocr_stamp_crops(stamp_crops: List[Image.Image]) -> List[str]:
-    """Run PaddleOCR on each stamp crop using fast batch inference.
-
-    Args:
-        stamp_crops: List of cropped PIL Images representing stamp regions.
-
-    Returns:
-        List of recognized text strings, one per stamp crop.
-    """
-    if not stamp_crops:
-        return []
-
-    paddle_engine = OCREngine.get_paddle()
-    extracted_strings: List[str] = ["" for _ in stamp_crops]
-
-    # Collect valid crops
-    valid_crops: List[np.ndarray] = []
-    valid_indices: List[int] = []
-    for idx, crop in enumerate(stamp_crops):
-        if crop.width >= 10 and crop.height >= 10:
-            valid_crops.append(np.array(crop.convert("RGB")))
-            valid_indices.append(idx)
-
-    if not valid_crops:
-        return extracted_strings
-
-    try:
-        if hasattr(paddle_engine, "predict"):
-            raw_outputs = list(paddle_engine.predict(valid_crops))
-            for orig_idx, raw_out in zip(valid_indices, raw_outputs):
-                blocks = _parse_paddle_raw([raw_out])
-                crop_text = " ".join(b["text"] for b in blocks if b.get("text")).strip()
-                extracted_strings[orig_idx] = crop_text
-        else:
-            for orig_idx, crop_np in zip(valid_indices, valid_crops):
-                raw_out = paddle_engine.ocr(crop_np, cls=True)
-                blocks = _parse_paddle_raw(raw_out)
-                crop_text = " ".join(b["text"] for b in blocks if b.get("text")).strip()
-                extracted_strings[orig_idx] = crop_text
-    except Exception:
-        pass
-
-    return extracted_strings

@@ -237,17 +237,10 @@ def preprocess(
     # Step 1 — Resolution Cap (max longest edge 1800px)
     image = cap_resolution(image, max_edge=1800)
 
-    # Convert PIL Image (RGB) to OpenCV BGR
-    img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
-    # Step 2 — Gray-World Color Balancing
-    balanced_bgr = gray_world_balance(img_bgr)
-
-    # Step 3 — CLAHE
-    clahe_gray = apply_clahe(balanced_bgr)
-
-    # Step 4 — Adaptive Thresholding (returns PIL Image in RGB mode)
-    final_image = apply_adaptive_threshold(clahe_gray)
+    # Return the clean rotation-corrected, resolution-capped RGB image
+    # Modern deep learning OCR (PaddleOCR DBNet + TrOCR) achieves optimal text
+    # detection on continuous-tone RGB/grayscale images without destructive binarization.
+    final_image = image
 
     preprocess_meta = {
         "rotation_corrected": rotation_corrected,
@@ -257,85 +250,4 @@ def preprocess(
     if return_meta:
         return final_image, preprocess_meta
     return final_image
-
-
-def detect_and_mask_stamps(pil_image: Image.Image) -> Dict[str, Any]:
-    """Isolate physical rubber stamps and ink from document content using HSV color analysis.
-
-    1. Convert PIL Image to OpenCV BGR, then to HSV.
-    2. Compute background hue:
-       - Filter pixels with Saturation > 15 AND Value > 50 (excludes pure black/white pixels).
-       - Compute statistical mode of Hue channel for these pixels (paper background_hue).
-    3. Build Color Mask (stamps and colored ink):
-       - Circular hue distance from background_hue: min(abs(h - bg), 180 - abs(h - bg)).
-       - Select pixels where circular_hue_distance > 35 AND Value > 30.
-    4. Build Dark Mask (black ink):
-       - Select pixels where Value < 60 AND Saturation < 80.
-    5. Find contours on combined mask (Color Mask OR Dark Mask) with area > 500px.
-    6. Crop each stamp region from the original image with 10px padding.
-
-    Returns:
-        dict:
-            stamp_crops: List[PIL.Image]
-            stamp_mask: np.ndarray (binary mask of stamp regions)
-            background_hue: int
-            stamp_count: int
-    """
-    # Work on a copy to avoid mutating original
-    orig_image = pil_image.convert("RGB")
-    w_img, h_img = orig_image.size
-
-    img_rgb = np.array(orig_image)
-    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-    img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-
-    h_channel = img_hsv[:, :, 0].astype(np.int32)
-    s_channel = img_hsv[:, :, 1].astype(np.int32)
-    v_channel = img_hsv[:, :, 2].astype(np.int32)
-
-    # 2. Compute background hue
-    bg_filter = (s_channel > 15) & (v_channel > 50)
-    filtered_h = h_channel[bg_filter]
-    if filtered_h.size > 0:
-        counts = np.bincount(filtered_h, minlength=180)
-        background_hue = int(np.argmax(counts))
-    else:
-        background_hue = 0
-
-    # 3. Build Color Mask (stamps and colored ink)
-    diff = np.abs(h_channel - background_hue)
-    circular_hue_distance = np.minimum(diff, 180 - diff)
-    color_mask = (circular_hue_distance > 35) & (v_channel > 30)
-
-    # 4. Build Dark Mask (black ink)
-    dark_mask = (v_channel < 60) & (s_channel < 80)
-
-    # 5. Combined Mask and Contours
-    combined_mask = np.uint8((color_mask | dark_mask) * 255)
-    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    stamp_contours = [c for c in contours if cv2.contourArea(c) > 500]
-
-    # Create clean binary mask of isolated stamp regions
-    stamp_mask = np.zeros_like(combined_mask)
-    if stamp_contours:
-        cv2.drawContours(stamp_mask, stamp_contours, -1, 255, -1)
-
-    # 6. Crop each stamp region from original image with 10px padding
-    stamp_crops: List[Image.Image] = []
-    for cnt in stamp_contours:
-        x, y, w_box, h_box = cv2.boundingRect(cnt)
-        x1 = max(0, x - 10)
-        y1 = max(0, y - 10)
-        x2 = min(w_img, x + w_box + 10)
-        y2 = min(h_img, y + h_box + 10)
-        crop = orig_image.crop((x1, y1, x2, y2))
-        stamp_crops.append(crop)
-
-    return {
-        "stamp_crops": stamp_crops,
-        "stamp_mask": stamp_mask,
-        "background_hue": background_hue,
-        "stamp_count": len(stamp_crops),
-    }
 

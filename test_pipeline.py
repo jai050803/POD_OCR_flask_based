@@ -14,6 +14,14 @@ current_dir = Path(__file__).resolve().parent
 if str(current_dir) not in sys.path:
     sys.path.insert(0, str(current_dir))
 
+# Ensure UTF-8 stdout encoding on Windows
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from app import run_pipeline
 
 
@@ -56,7 +64,6 @@ def main():
     print(f"quality_tier: {doc_quality.get('quality_tier')}")
     print(f"recommendation: {doc_quality.get('recommendation')}")
     print(f"rotation_corrected: {doc_quality.get('rotation_corrected')}")
-    print(f"stamp_detected: {doc_quality.get('stamp_detected')}")
 
     # 4. Print raw text (first 500 chars)
     print("\n=== RAW TEXT (first 500 chars) ===")

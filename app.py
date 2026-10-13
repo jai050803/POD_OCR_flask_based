@@ -1,5 +1,26 @@
 
 import os
+
+# Set PaddlePaddle environment flags for CPU inference stability
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
+os.environ["PADDLE_PDX_EAGER_INIT"] = "0"
+
+# Make PaddleX initialization idempotent to prevent 'PDX has already been initialized' crash
+try:
+    import paddlex.repo_manager.core as pdx_core
+
+    _orig_pdx_initialize = pdx_core.initialize
+
+    def _safe_pdx_initialize(*args, **kwargs):
+        if pdx_core._GlobalContext.is_initialized():
+            return
+        return _orig_pdx_initialize(*args, **kwargs)
+
+    pdx_core.initialize = _safe_pdx_initialize
+except Exception:
+    pass
+
 import tempfile
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
@@ -107,35 +128,32 @@ def run_pipeline(file_path: str) -> dict:
                 )
     else:
         with Image.open(file_path) as img:
-            pil_image = img.convert("RGB")
+            # Handle RGBA/transparency safely by compositing onto a clean white background
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                rgba = img.convert("RGBA")
+                white_bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                white_bg.paste(rgba, mask=rgba.split()[3])
+                pil_image = white_bg
+            else:
+                pil_image = img.convert("RGB")
 
-    # Step a: Preprocessing (rotation correction, resolution cap, CLAHE, thresholding)
+    # Step a: Preprocessing (rotation correction and resolution cap)
     preprocessed_image, preprocess_meta = preprocess.preprocess(pil_image)
 
-    # Step b: Detect and mask stamps
-    stamp_result = preprocess.detect_and_mask_stamps(preprocessed_image)
-    preprocess_meta["stamp_detected"] = stamp_result["stamp_count"] > 0
-    preprocess_meta["stamp_count"] = stamp_result["stamp_count"]
-    preprocess_meta["stamp_crops"] = stamp_result["stamp_crops"]
-
-    # Step c: Two-tier OCR text extraction
+    # Step b: Two-tier OCR text extraction (PaddleOCR + TrOCR fallback)
     ocr_result = ocr.extract_text(preprocessed_image)
 
-    # Step d: OCR on isolated stamp crops
-    stamp_texts = ocr.ocr_stamp_crops(stamp_result["stamp_crops"])
-    ocr_result["stamp_texts"] = stamp_texts
-
-    # Step e: Extract structured logistics fields
+    # Step c: Extract structured logistics fields
     structured_fields = extractor.extract_fields(
         ocr_result, preprocessed_image
     )
 
-    # Step f: Classify document as delivery document
+    # Step d: Classify document as delivery document
     doc_classification = classifier.is_delivery_document(
         ocr_result["raw_text"]
     )
 
-    # Step g: Assess document and extraction quality
+    # Step e: Assess document and extraction quality
     quality_assessment = classifier.assess_document_quality(
         ocr_result, preprocess_meta
     )
@@ -154,7 +172,6 @@ def run_pipeline(file_path: str) -> dict:
             "mean_confidence": ocr_result["mean_confidence"],
             "trocr_used": ocr_result["trocr_used"],
             "ocr_blocks": ocr_result["blocks"],
-            "stamp_texts": stamp_texts,
             "ocr_engine": (
                 "PaddleOCR+TrOCR"
                 if ocr_result["trocr_used"]
@@ -211,6 +228,12 @@ def extract():
 
 
 if __name__ == "__main__":
+    # Pre-warm PaddleOCR engine once at process startup to prevent request race conditions
+    try:
+        ocr.OCREngine.get_paddle()
+    except Exception as e:
+        print(f"PaddleOCR warmup notice: {e}")
+
     port = int(os.environ.get("PORT", 5000))
     debug_mode = os.environ.get("FLASK_DEBUG", "false").lower() in ("true", "1")
     app.run(debug=debug_mode, host="0.0.0.0", port=port)

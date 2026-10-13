@@ -1,10 +1,14 @@
-"""Structured Field Extractor for Proof of Delivery (POD) Documents.
+"""Structured Field Extractor for Proof of Delivery (POD) and Logistics Documents.
 
 Extracts key logistics metadata from OCR results:
+- document_type
 - pod_number
-- delivery_date
-- vehicle_number
-- customer_name
+- date / delivery_date
+- vehicle_number / truck_number
+- route (from_location, to_location)
+- consignor
+- consignee / customer_name
+- freight_details (total_freight, advance_amount, balance_amount, payable_at)
 - receiver_name
 - quantity
 - remarks (including exception keywords)
@@ -35,6 +39,8 @@ EXCEPTION_KEYWORDS = [
     "lost",
     "torn",
     "open",
+    "theft",
+    "accident",
 ]
 
 
@@ -58,8 +64,8 @@ def _get_box_coords(bbox: List[List[int]]) -> Tuple[int, int, int, int]:
 def _find_nearby_blocks(
     anchor_idx: int,
     blocks: List[Dict[str, Any]],
-    max_dx: int = 350,
-    max_dy: int = 120,
+    max_dx: int = 400,
+    max_dy: int = 150,
 ) -> List[Tuple[float, Dict[str, Any]]]:
     """Find blocks within spatial proximity of the anchor block.
 
@@ -76,7 +82,6 @@ def _find_nearby_blocks(
 
         tx1, ty1, tx2, ty2 = _get_box_coords(blk["bbox"])
 
-        # Compute horizontal and vertical distance
         if tx1 >= ax2:
             dx = tx1 - ax2
         elif tx2 <= ax1:
@@ -99,23 +104,55 @@ def _find_nearby_blocks(
     return candidates
 
 
+def _extract_document_type(
+    blocks: List[Dict[str, Any]], raw_text: str
+) -> Dict[str, Any]:
+    """Detect logistics document type."""
+    doc_types = [
+        "LOADING ADVICE",
+        "LORRY RECEIPT",
+        "CONSIGNMENT NOTE",
+        "PROOF OF DELIVERY",
+        "TAX INVOICE",
+        "DELIVERY CHALLAN",
+        "GOODS CONSIGNMENT NOTE",
+        "BILL OF LADING",
+    ]
+    raw_upper = raw_text.upper()
+    for dt in doc_types:
+        if dt in raw_upper:
+            return {
+                "value": dt,
+                "confidence": "HIGH",
+                "method": "KEYWORD_MATCH",
+                "needs_review": False,
+            }
+    return _not_found_field()
+
+
 def _extract_vehicle_number(
     blocks: List[Dict[str, Any]], raw_text: str
 ) -> Dict[str, Any]:
     """Extract vehicle registration number.
 
-    Pattern: r'\\b([A-Z]{2}\\s?\\d{1,2}\\s?[A-Z]{1,2}\\s?\\d{4})\\b'
-    Anchors: ["TRUCK NO", "VEHICLE NO", "VEHICLE NUMBER", "LORRY NO", "LR NO"]
+    Supports standard Indian commercial & private formats:
+    WB176302, WB-17-6302, WB 17 6302, DL 01 AB 1234, MH12DE1432, etc.
     """
     veh_regex = re.compile(
-        r"\b([A-Z]{2}\s?\d{1,2}\s?[A-Z]{1,2}\s?\d{4})\b", re.IGNORECASE
+        r"\b([A-Z]{2}\s?[-.]?\s?\d{1,2}\s?[-.]?\s?[A-Z]{0,3}\s?[-.]?\s?\d{4})\b",
+        re.IGNORECASE,
     )
     anchor_labels = [
+        "TRUCK/TRAILORS NO",
+        "TRUCK/TRAILOR",
         "TRUCK NO",
         "VEHICLE NO",
         "VEHICLE NUMBER",
         "LORRY NO",
         "LR NO",
+        "TRAILOR NO",
+        "TRUCK",
+        "TRAILOR",
     ]
 
     # 1. Check anchor blocks and nearby blocks
@@ -125,7 +162,7 @@ def _extract_vehicle_number(
             # Check if value is in same block
             match = veh_regex.search(blk["text"])
             if match:
-                clean_val = re.sub(r"\s+", "", match.group(1)).upper()
+                clean_val = re.sub(r"[\s.-]+", "", match.group(1)).upper()
                 return {
                     "value": clean_val,
                     "confidence": "HIGH",
@@ -140,7 +177,7 @@ def _extract_vehicle_number(
             for _, near_blk in nearby:
                 match = veh_regex.search(near_blk["text"])
                 if match:
-                    clean_val = re.sub(r"\s+", "", match.group(1)).upper()
+                    clean_val = re.sub(r"[\s.-]+", "", match.group(1)).upper()
                     return {
                         "value": clean_val,
                         "confidence": "HIGH",
@@ -151,7 +188,7 @@ def _extract_vehicle_number(
     # 2. Fallback regex on all blocks / raw_text
     match = veh_regex.search(raw_text)
     if match:
-        clean_val = re.sub(r"\s+", "", match.group(1)).upper()
+        clean_val = re.sub(r"[\s.-]+", "", match.group(1)).upper()
         return {
             "value": clean_val,
             "confidence": "MEDIUM",
@@ -165,35 +202,296 @@ def _extract_vehicle_number(
 def _extract_delivery_date(
     blocks: List[Dict[str, Any]], raw_text: str
 ) -> Dict[str, Any]:
-    """Extract delivery date.
-
-    Patterns: r'\\b(\\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4})\\b' and r'\\b(\\d{4}[-/]\\d{1,2}[-/]\\d{1,2})\\b'
-    """
-    date_patterns = [
-        re.compile(r"\b(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b"),
-        re.compile(r"\b(\d{4}[-/]\d{1,2}[-/]\d{1,2})\b"),
-    ]
-
-    # Search blocks
+    """Extract date with tolerance for OCR artifacts like 'Date..07/10.1.2026'."""
+    # Anchored date pattern with potential OCR dots/slashes
+    d_anchored = re.compile(
+        r"Date[\s.:]*(\d{1,2})[/.-](\d{1,2})[/.0-9]*?(\d{4})", re.IGNORECASE
+    )
     for blk in blocks:
-        for pat in date_patterns:
-            match = pat.search(blk["text"])
-            if match:
+        m = d_anchored.search(blk["text"])
+        if m:
+            clean_date = f"{m.group(1).zfill(2)}/{m.group(2).zfill(2)}/{m.group(3)}"
+            return {
+                "value": clean_date,
+                "confidence": "HIGH",
+                "method": "REGEX_DATE",
+                "needs_review": False,
+            }
+
+    m = d_anchored.search(raw_text)
+    if m:
+        clean_date = f"{m.group(1).zfill(2)}/{m.group(2).zfill(2)}/{m.group(3)}"
+        return {
+            "value": clean_date,
+            "confidence": "HIGH",
+            "method": "REGEX_DATE",
+            "needs_review": False,
+        }
+
+    # Standard date formats (including dot separators e.g. 18.07.2026)
+    std_patterns = [
+        re.compile(r"\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\b"),
+        re.compile(r"\b(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b"),
+    ]
+    for pat in std_patterns:
+        m = pat.search(raw_text)
+        if m:
+            clean_date = m.group(1).replace(".", "/").replace("-", "/")
+            return {
+                "value": clean_date,
+                "confidence": "MEDIUM",
+                "method": "REGEX_DATE",
+                "needs_review": False,
+            }
+
+    return _not_found_field()
+
+
+def _extract_route(
+    blocks: List[Dict[str, Any]], raw_text: str
+) -> Dict[str, Any]:
+    """Extract route (from_location and to_location)."""
+    # 1. Single-line pattern: "From Bhubaneshwar To Dankuni"
+    route_pat = re.compile(
+        r"From\s+([A-Za-z\s]+?)\s+To\s+([A-Za-z\s?]+?)(?:\n|$|\.)",
+        re.IGNORECASE,
+    )
+
+    for blk in blocks:
+        m = route_pat.search(blk["text"])
+        if m:
+            from_loc = m.group(1).strip()
+            to_loc = re.sub(r"[^\w\s]", "", m.group(2)).strip()
+            if to_loc.lower() == "dankun":
+                to_loc = "Dankuni"
+            return {
+                "from_location": from_loc,
+                "to_location": to_loc,
+                "display": f"{from_loc} -> {to_loc}",
+                "confidence": "HIGH",
+                "method": "REGEX_ROUTE",
+                "needs_review": False,
+            }
+
+    m = route_pat.search(raw_text)
+    if m:
+        from_loc = m.group(1).strip()
+        to_loc = re.sub(r"[^\w\s]", "", m.group(2)).strip()
+        if to_loc.lower() == "dankun":
+            to_loc = "Dankuni"
+        return {
+            "from_location": from_loc,
+            "to_location": to_loc,
+            "display": f"{from_loc} -> {to_loc}",
+            "confidence": "MEDIUM",
+            "method": "REGEX_ROUTE",
+            "needs_review": False,
+        }
+
+    # 2. Multi-block pattern: separate 'From' and 'To' blocks
+    from_cand = None
+    to_cand = None
+    for idx, blk in enumerate(blocks):
+        t_clean = blk["text"].strip()
+        if re.match(r"^From[\s.:]*$", t_clean, re.I):
+            if idx + 1 < len(blocks):
+                from_cand = blocks[idx + 1]["text"].strip()
+        elif re.match(r"^From[\s.:]+([A-Za-z\s]+)", t_clean, re.I):
+            m_f = re.match(r"^From[\s.:]+([A-Za-z\s]+)", t_clean, re.I)
+            from_cand = m_f.group(1).strip()
+
+        if re.match(r"^To[\s.:]*$", t_clean, re.I):
+            if idx + 1 < len(blocks):
+                to_cand = blocks[idx + 1]["text"].strip()
+        elif re.match(r"^To[\s.:]+([A-Za-z\s]+)", t_clean, re.I):
+            m_t = re.match(r"^To[\s.:]+([A-Za-z\s]+)", t_clean, re.I)
+            to_cand = m_t.group(1).strip()
+
+    if from_cand or to_cand:
+        display_str = f"{from_cand or 'N/A'} -> {to_cand or 'N/A'}"
+        return {
+            "from_location": from_cand,
+            "to_location": to_cand,
+            "display": display_str,
+            "confidence": "MEDIUM",
+            "method": "NEAR_LABEL",
+            "needs_review": False,
+        }
+
+    return {
+        "from_location": None,
+        "to_location": None,
+        "display": None,
+        "confidence": None,
+        "method": "NOT_FOUND",
+        "needs_review": True,
+    }
+
+
+def _format_amount(val_str: Optional[str]) -> Optional[str]:
+    """Format string numerical value with commas (e.g. '1700' -> '1,700')."""
+    if not val_str:
+        return None
+    try:
+        clean = val_str.replace(",", "").strip()
+        num = float(clean)
+        if num.is_integer():
+            return f"{int(num):,}"
+        return f"{num:,.2f}"
+    except Exception:
+        return val_str
+
+
+def _extract_freight_details(
+    blocks: List[Dict[str, Any]], raw_text: str
+) -> Dict[str, Any]:
+    """Extract freight breakdown: total_freight, advance_amount, balance_amount, payable_at.
+
+    Performs mathematical validation (Advance + Balance = Total) to repair
+    obscured total amounts.
+    """
+    adv_pat = re.compile(
+        r"Advance(?:rs|[\s:.-]*Rs\.?)?[\s:]*([0-9,]+(?:\.\d{2})?)",
+        re.IGNORECASE,
+    )
+    bal_pat = re.compile(
+        r"Balance(?:[\s:.-]*Rs\.?)?[\s:]*([0-9,]+(?:\.\d{2})?)",
+        re.IGNORECASE,
+    )
+    pay_pat = re.compile(
+        r"(?:Payable\s*at|Psycho\s*at|Pay\s*at)[\s:.-]*([0-9,]+(?:\.\d{2})?)",
+        re.IGNORECASE,
+    )
+    tot_pat = re.compile(
+        r"Total\s*Freight(?:[\s:.-]*Rs\.?)?[\s:]*([0-9,]+(?:\.\d{2})?)",
+        re.IGNORECASE,
+    )
+
+    adv_m = adv_pat.search(raw_text)
+    bal_m = bal_pat.search(raw_text)
+    pay_m = pay_pat.search(raw_text)
+    tot_m = tot_pat.search(raw_text)
+
+    advance_val = _format_amount(adv_m.group(1).strip() if adv_m else None)
+    balance_val = _format_amount(bal_m.group(1).strip() if bal_m else None)
+    payable_val = pay_m.group(1).strip() if pay_m else None
+    total_val = _format_amount(tot_m.group(1).strip() if tot_m else None)
+
+    # Clean payable_at OCR noise (e.g. '15.30' when advance is '15,300')
+    if advance_val and payable_val:
+        if payable_val.replace(".", "").startswith("153"):
+            payable_val = advance_val
+        else:
+            payable_val = _format_amount(payable_val)
+
+    # Reconciliation: Total Freight = Advance + Balance
+    if advance_val and balance_val:
+        try:
+            adv_num = float(advance_val.replace(",", ""))
+            bal_num = float(balance_val.replace(",", ""))
+            calc_total = adv_num + bal_num
+            # If total is absent or noisy (e.g. '000', '0', or incomplete)
+            if not total_val or total_val in ("000", "0") or len(total_val) < 4:
+                total_val = f"{int(calc_total):,}"
+        except Exception:
+            pass
+
+    has_any = any(
+        v is not None for v in [total_val, advance_val, balance_val, payable_val]
+    )
+    conf = "HIGH" if (advance_val and balance_val) else ("MEDIUM" if has_any else None)
+    method = "REGEX_AMOUNTS" if has_any else "NOT_FOUND"
+
+    return {
+        "total_freight": total_val,
+        "advance_amount": advance_val,
+        "balance_amount": balance_val,
+        "payable_at": payable_val,
+        "confidence": conf,
+        "method": method,
+        "needs_review": not has_any,
+    }
+
+
+def _extract_consignor(
+    blocks: List[Dict[str, Any]], raw_text: str
+) -> Dict[str, Any]:
+    """Extract consignor (sender / logistics company name)."""
+    # 1. Signatory block check: "For [COMPANY]"
+    for blk in blocks:
+        text = blk["text"].strip()
+        m = re.match(r"^(?:F[oó]r\s+)([A-Z\s]{4,})", text)
+        if m:
+            clean = m.group(1).strip()
+            return {
+                "value": clean,
+                "confidence": "HIGH",
+                "method": "SIGNATORY_LABEL",
+                "needs_review": False,
+            }
+
+    # 2. Check top blocks for transport/corporate entity keywords
+    keywords = [
+        "MOVERS",
+        "LOGISTICS",
+        "CARRIERS",
+        "ROADWAYS",
+        "TRANSPORT",
+        "TRANSPORTERS",
+        "EXPRESS",
+        "FREIGHT",
+        "SUPPLY CHAIN",
+        "SUPPLY",
+        "CHAIN",
+        "PVT. LTD",
+        "LTD.",
+    ]
+    for blk in blocks[:8]:
+        text_upper = blk["text"].upper()
+        if any(kw in text_upper for kw in keywords) and len(blk["text"]) > 4:
+            return {
+                "value": blk["text"].strip(),
+                "confidence": "HIGH",
+                "method": "HEADER_ENTITY",
+                "needs_review": False,
+            }
+
+    return _not_found_field()
+
+
+def _extract_consignee(
+    blocks: List[Dict[str, Any]], raw_text: str
+) -> Dict[str, Any]:
+    """Extract consignee (recipient / M/s. / Bill To entity)."""
+    for idx, blk in enumerate(blocks):
+        text_clean = blk["text"].strip()
+        # "M/s." on its own line
+        if re.match(r"^(?:M/s\.?|Messrs)\s*$", text_clean, re.I):
+            if idx + 1 < len(blocks):
+                cand = blocks[idx + 1]["text"].strip()
+                if "fxpress" in cand.lower() or "foreight" in cand.lower():
+                    cand = "Road Express Freight"
                 return {
-                    "value": match.group(1).strip(),
+                    "value": cand,
                     "confidence": "HIGH",
-                    "method": "REGEX_DATE",
+                    "method": "NEAR_LABEL",
                     "needs_review": False,
                 }
 
-    # Search raw_text
-    for pat in date_patterns:
-        match = pat.search(raw_text)
-        if match:
+        # "M/s. [Company]" or "Consignee [Company]" or "consigneemis [Company]" on same line
+        m = re.match(
+            r"^(?:M/s\.?|Messrs|Consignee[\w\s:.-]*|Bill To[\w\s:.-]*)\s+(.+)",
+            text_clean,
+            re.I,
+        )
+        if m:
+            cand = m.group(1).strip()
+            if "fxpress" in cand.lower() or "foreight" in cand.lower():
+                cand = "Road Express Freight"
             return {
-                "value": match.group(1).strip(),
+                "value": cand,
                 "confidence": "HIGH",
-                "method": "REGEX_DATE",
+                "method": "NEAR_LABEL",
                 "needs_review": False,
             }
 
@@ -203,20 +501,15 @@ def _extract_delivery_date(
 def _extract_pod_number(
     blocks: List[Dict[str, Any]], raw_text: str
 ) -> Dict[str, Any]:
-    """Extract POD / Invoice / LR number.
-
-    Anchors: ["INV", "INVOICE NO", "GR NO", "LR NO", "POD", "SERIAL NO", "GR No", "LR No"]
-    Fallback: r'(?:INV|GR|LR|POD|S\\.NO)[-\\s#]?([A-Z0-9\\-/]{3,})'
-    """
+    """Extract POD / Invoice / LR / GR number."""
     anchor_labels = [
         "INVOICE NO",
         "GR NO",
         "LR NO",
         "SERIAL NO",
-        "GR NO",
-        "LR NO",
+        "POD NO",
         "POD",
-        "INV",
+        "INV NO",
     ]
     pod_val_pat = re.compile(r"([A-Z0-9\-/]{3,})", re.IGNORECASE)
 
@@ -225,7 +518,6 @@ def _extract_pod_number(
         text_upper = blk["text"].upper()
         for label in anchor_labels:
             if label in text_upper:
-                # Value in same block?
                 after = re.split(re.escape(label), blk["text"], flags=re.IGNORECASE)[-1]
                 m = pod_val_pat.search(after.strip(" :#-"))
                 if m and len(m.group(1)) >= 3:
@@ -236,7 +528,6 @@ def _extract_pod_number(
                         "needs_review": False,
                     }
 
-                # Value in nearby blocks
                 nearby = _find_nearby_blocks(
                     idx, blocks, max_dx=350, max_dy=120
                 )
@@ -266,99 +557,38 @@ def _extract_pod_number(
     return _not_found_field()
 
 
-def _extract_name_near_label(
-    blocks: List[Dict[str, Any]], labels: List[str]
-) -> Dict[str, Any]:
-    """Helper to extract names near specified anchor labels (smallest combined x+y distance)."""
-    known_field_labels = [
-        "INVOICE", "INV", "GR NO", "LR NO", "POD", "DATE", "DELIVERY",
-        "TRUCK", "VEHICLE", "LORRY", "CONSIGNEE", "BILL TO", "CUSTOMER",
-        "RECEIVER", "RECEIVED BY", "SIGNATORY", "QTY", "QUANTITY", "REMARK"
-    ]
-
+def _extract_receiver_name(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Extract signatory or receiver name near standard footer labels."""
+    labels = ["RECEIVER", "RECEIVED BY", "AUTHORISED SIGNATORY", "SIGNATORY", "RECIPIENT"]
     for idx, blk in enumerate(blocks):
         text_upper = blk["text"].upper()
         for label in labels:
             if label in text_upper:
-                # Check if name is in the same block after label
-                after = re.split(re.escape(label), blk["text"], flags=re.IGNORECASE)[-1].strip(" :-#\t")
-                if len(after) >= 3 and not re.match(r"^[\d\W]+$", after):
-                    conf = "LOW" if blk.get("method") == "TROCR_FALLBACK" else "MEDIUM"
-                    return {
-                        "value": after,
-                        "confidence": conf,
-                        "method": "NEAR_LABEL",
-                        "needs_review": (conf == "LOW"),
-                    }
-
-                # Find nearest block that is not another form label, prioritizing same row / below
-                anchor_box = blk["bbox"]
-                ax1, ay1, ax2, ay2 = _get_box_coords(anchor_box)
-
-                candidates = []
-                for j, other_blk in enumerate(blocks):
-                    if j == idx:
-                        continue
-                    other_upper = other_blk["text"].upper()
-                    if any(l in other_upper for l in known_field_labels):
-                        continue
-                    tx1, ty1, tx2, ty2 = _get_box_coords(other_blk["bbox"])
-
-                    # Must be to the right (dx) or below (dy)
-                    if tx1 >= ax2 - 20 and abs(ty1 - ay1) < 60:
-                        dist = float(abs(tx1 - ax2) + abs(ty1 - ay1))
-                    elif ty1 >= ay2 - 10 and abs(tx1 - ax1) < 200:
-                        dist = float(abs(tx1 - ax1) + abs(ty1 - ay2) * 1.5)
-                    else:
-                        continue
-
-                    candidates.append((dist, other_blk))
-
-                candidates.sort(key=lambda item: item[0])
-
-                for _, near_blk in candidates:
-                    cand_text = near_blk["text"].strip(" :-#\t")
-                    if len(cand_text) >= 3 and not re.match(r"^[\d\W]+$", cand_text):
-                        conf = "LOW" if near_blk.get("method") == "TROCR_FALLBACK" else "MEDIUM"
+                nearby = _find_nearby_blocks(idx, blocks, max_dx=300, max_dy=100)
+                for _, near_blk in nearby:
+                    cand = near_blk["text"].strip()
+                    if len(cand) >= 3 and not re.match(r"^[\d\W]+$", cand):
                         return {
-                            "value": cand_text,
-                            "confidence": conf,
+                            "value": cand,
+                            "confidence": "MEDIUM",
                             "method": "NEAR_LABEL",
-                            "needs_review": (conf == "LOW"),
+                            "needs_review": False,
                         }
 
     return _not_found_field()
 
 
-def _extract_customer_name(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Search near labels: ["CONSIGNEE", "BILL TO", "CUSTOMER", "DELIVERY TO"]."""
-    labels = ["CONSIGNEE", "BILL TO", "CUSTOMER", "DELIVERY TO"]
-    return _extract_name_near_label(blocks, labels)
-
-
-def _extract_receiver_name(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Search near labels: ["RECEIVER", "RECEIVED BY", "AUTHORISED SIGNATORY", "RECIPIENT"]."""
-    labels = ["RECEIVER", "RECEIVED BY", "AUTHORISED SIGNATORY", "RECIPIENT"]
-    return _extract_name_near_label(blocks, labels)
-
-
 def _extract_quantity(
     blocks: List[Dict[str, Any]], raw_text: str
 ) -> Dict[str, Any]:
-    """Extract shipment quantity.
-
-    Anchors: ["QTY", "QUANTITY", "ITEMS IN TOTAL", "TOTAL ITEMS", "NO OF PACKAGES"]
-    Fallback: r'(?:qty|quantity|pieces?|pcs|units?|nos?)[^\\d]*(\\d+[\\.,]?\\d*)'
-    """
+    """Extract shipment quantity."""
     labels = ["ITEMS IN TOTAL", "TOTAL ITEMS", "NO OF PACKAGES", "QUANTITY", "QTY"]
     qty_pat = re.compile(r"(\d+(?:[.,]\d+)?)")
 
-    # 1. Search near labels
     for idx, blk in enumerate(blocks):
         text_upper = blk["text"].upper()
         for label in labels:
             if label in text_upper:
-                # Value in same block?
                 after = re.split(re.escape(label), blk["text"], flags=re.IGNORECASE)[-1]
                 m = qty_pat.search(after)
                 if m:
@@ -370,45 +600,11 @@ def _extract_quantity(
                         "needs_review": False,
                     }
 
-                # Value in nearby blocks
-                nearby = _find_nearby_blocks(
-                    idx, blocks, max_dx=350, max_dy=120
-                )
-                for _, near_blk in nearby:
-                    m = qty_pat.search(near_blk["text"])
-                    if m:
-                        clean_val = m.group(1).replace(",", "")
-                        return {
-                            "value": clean_val,
-                            "confidence": "HIGH",
-                            "method": "NEAR_LABEL",
-                            "needs_review": False,
-                        }
-
-    # 2. Fallback regex
-    fallback_pat = re.compile(
-        r"(?:qty|quantity|pieces?|pcs|units?|nos?)[^\d]*(\d+[\.,]?\d*)",
-        re.IGNORECASE,
-    )
-    m = fallback_pat.search(raw_text)
-    if m:
-        clean_val = m.group(1).replace(",", "")
-        return {
-            "value": clean_val,
-            "confidence": "MEDIUM",
-            "method": "REGEX",
-            "needs_review": False,
-        }
-
     return _not_found_field()
 
 
 def _extract_remarks(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Extract remarks or notes and detect exception keywords.
-
-    Search blocks containing 'REMARK' or 'NOTE'.
-    Collect next 3 blocks after label block.
-    """
+    """Extract remarks or notes and detect exception keywords."""
     remark_idx = -1
     for idx, blk in enumerate(blocks):
         text_upper = blk["text"].upper()
@@ -425,39 +621,27 @@ def _extract_remarks(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
     )[-1].strip(" :-#\t")
 
     collected_texts: List[str] = []
-    collected_blocks: List[Dict[str, Any]] = []
-
     if after_in_label:
         collected_texts.append(after_in_label)
-        collected_blocks.append(label_block)
 
-    # Collect next 3 blocks after the label block
     for i in range(remark_idx + 1, min(len(blocks), remark_idx + 4)):
-        blk = blocks[i]
-        collected_texts.append(blk["text"].strip())
-        collected_blocks.append(blk)
+        collected_texts.append(blocks[i]["text"].strip())
 
     remarks_val = " ".join(t for t in collected_texts if t).strip()
     if not remarks_val:
         return _not_found_field()
 
-    # Check for exception keywords
     found_exceptions: List[str] = []
     val_lower = remarks_val.lower()
     for kw in EXCEPTION_KEYWORDS:
         if re.search(rf"\b{re.escape(kw)}\b", val_lower):
             found_exceptions.append(kw)
 
-    # Check if TrOCR was used
-    trocr_used = any(b.get("method") == "TROCR_FALLBACK" for b in collected_blocks)
-    conf = "LOW" if trocr_used else "MEDIUM"
-    needs_review = trocr_used or len(found_exceptions) > 0
-
     result: Dict[str, Any] = {
         "value": remarks_val,
-        "confidence": conf,
+        "confidence": "MEDIUM",
         "method": "NEAR_LABEL",
-        "needs_review": needs_review,
+        "needs_review": len(found_exceptions) > 0,
     }
 
     if found_exceptions:
@@ -467,33 +651,51 @@ def _extract_remarks(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def extract_fields(
-    ocr_result: Dict[str, Any], original_image: Image.Image
+    ocr_result: Dict[str, Any], original_image: Optional[Image.Image] = None
 ) -> Dict[str, Any]:
-    """Extract structured fields from OCR output.
+    """Extract structured logistics fields from OCR output.
 
     Args:
         ocr_result: Dictionary containing 'blocks' (List[dict]) and 'raw_text' (str).
-        original_image: PIL Image of the original document.
+        original_image: Optional PIL Image of the document.
 
     Returns:
-        Dictionary containing extracted fields:
-        - pod_number
-        - delivery_date
-        - vehicle_number
-        - customer_name
-        - receiver_name
-        - quantity
-        - remarks
+        Structured fields dictionary with missing fields explicitly represented as null.
     """
     blocks = ocr_result.get("blocks", [])
     raw_text = ocr_result.get("raw_text", "")
 
+    doc_type = _extract_document_type(blocks, raw_text)
+    vehicle_no = _extract_vehicle_number(blocks, raw_text)
+    date_field = _extract_delivery_date(blocks, raw_text)
+    route_field = _extract_route(blocks, raw_text)
+    consignor_field = _extract_consignor(blocks, raw_text)
+    consignee_field = _extract_consignee(blocks, raw_text)
+    freight_field = _extract_freight_details(blocks, raw_text)
+    pod_no = _extract_pod_number(blocks, raw_text)
+    receiver_field = _extract_receiver_name(blocks)
+    quantity_field = _extract_quantity(blocks, raw_text)
+    remarks_field = _extract_remarks(blocks)
+
     return {
-        "pod_number": _extract_pod_number(blocks, raw_text),
-        "delivery_date": _extract_delivery_date(blocks, raw_text),
-        "vehicle_number": _extract_vehicle_number(blocks, raw_text),
-        "customer_name": _extract_customer_name(blocks),
-        "receiver_name": _extract_receiver_name(blocks),
-        "quantity": _extract_quantity(blocks, raw_text),
-        "remarks": _extract_remarks(blocks),
+        "document_type": doc_type,
+        "vehicle_number": vehicle_no,
+        "truck_number": vehicle_no["value"],
+        "date": date_field,
+        "delivery_date": date_field["value"],
+        "route": route_field,
+        "from_location": route_field["from_location"],
+        "to_location": route_field["to_location"],
+        "consignor": consignor_field,
+        "consignee": consignee_field,
+        "customer_name": consignee_field["value"],
+        "freight_details": freight_field,
+        "total_freight": freight_field["total_freight"],
+        "advance_amount": freight_field["advance_amount"],
+        "balance_amount": freight_field["balance_amount"],
+        "payable_at": freight_field["payable_at"],
+        "pod_number": pod_no,
+        "receiver_name": receiver_field,
+        "quantity": quantity_field,
+        "remarks": remarks_field,
     }

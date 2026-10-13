@@ -47,3 +47,13 @@ output_*.json
 texts_*.json
 *.log
 .pytest_cache/
+
+# Experiment notebooks and scratch scripts
+*.ipynb
+.ipynb_checkpoints/
+scratch/
+
+# Test documents and images
+test.png
+test_*.png
+*.pdf

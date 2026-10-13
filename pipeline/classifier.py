@@ -90,8 +90,6 @@ def assess_document_quality(
     # Preprocessing metadata extraction
     rotation_corrected = bool(preprocess_meta.get("rotation_corrected", False))
     rotation_angle = int(preprocess_meta.get("rotation_angle", 0))
-    stamp_detected = bool(preprocess_meta.get("stamp_detected", False))
-    stamp_count = int(preprocess_meta.get("stamp_count", 0))
 
     # Recommendation determination
     if quality_tier == "POOR":
@@ -101,10 +99,6 @@ def assess_document_quality(
     elif trocr_fallback_count > 5:
         recommendation = (
             "VERIFY — Multiple handwritten fields detected, review flagged fields"
-        )
-    elif stamp_detected:
-        recommendation = (
-            "CHECK_STAMP — Stamp may obscure content, verify covered fields"
         )
     else:
         recommendation = (
@@ -118,7 +112,5 @@ def assess_document_quality(
         "trocr_fallback_count": trocr_fallback_count,
         "rotation_corrected": rotation_corrected,
         "rotation_angle": rotation_angle,
-        "stamp_detected": stamp_detected,
-        "stamp_count": stamp_count,
         "recommendation": recommendation,
     }

@@ -696,10 +696,6 @@
             <div class="tab-pane" id="tab2">
                 <div class="recommendation-banner" id="recommendationBanner"></div>
                 <div class="stats-grid" id="statsGrid"></div>
-                <div class="quality-card">
-                    <div class="stat-label">Detected Stamp Texts</div>
-                    <ul class="stamp-list" id="stampList"></ul>
-                </div>
             </div>
 
             <!-- Tab 3: Full OCR JSON -->
@@ -998,26 +994,30 @@
                 const fieldsGrid = document.getElementById('fieldsGrid');
                 fieldsGrid.innerHTML = '';
 
-                const fieldKeys = [
-                    'pod_number',
-                    'delivery_date',
-                    'vehicle_number',
-                    'customer_name',
-                    'receiver_name',
-                    'quantity',
-                    'remarks'
+                const displayCards = [
+                    { label: 'Vehicle / Truck No', val: fields.vehicle_number?.value || fields.truck_number, conf: fields.vehicle_number?.confidence, method: fields.vehicle_number?.method, review: fields.vehicle_number?.needs_review },
+                    { label: 'Date', val: fields.date?.value || fields.delivery_date, conf: fields.date?.confidence, method: fields.date?.method, review: fields.date?.needs_review },
+                    { label: 'Route', val: fields.route?.display || (fields.route?.from_location ? `${fields.route.from_location} → ${fields.route.to_location}` : null), conf: fields.route?.confidence, method: fields.route?.method, review: fields.route?.needs_review },
+                    { label: 'Total Freight (Rs.)', val: fields.freight_details?.total_freight || fields.total_freight, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: fields.freight_details?.needs_review },
+                    { label: 'Advance Amount (Rs.)', val: fields.freight_details?.advance_amount || fields.advance_amount, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false },
+                    { label: 'Balance Amount (Rs.)', val: fields.freight_details?.balance_amount || fields.balance_amount, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false },
+                    { label: 'Payable At', val: fields.freight_details?.payable_at || fields.payable_at, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false },
+                    { label: 'Consignor / Transporter', val: fields.consignor?.value, conf: fields.consignor?.confidence, method: fields.consignor?.method, review: fields.consignor?.needs_review },
+                    { label: 'Consignee / Recipient', val: fields.consignee?.value || fields.customer_name, conf: fields.consignee?.confidence, method: fields.consignee?.method, review: fields.consignee?.needs_review },
+                    { label: 'Document Type', val: fields.document_type?.value, conf: fields.document_type?.confidence, method: fields.document_type?.method, review: false },
+                    { label: 'POD / Invoice / LR No', val: fields.pod_number?.value, conf: fields.pod_number?.confidence, method: fields.pod_number?.method, review: fields.pod_number?.needs_review },
+                    { label: 'Remarks / Exceptions', val: fields.remarks?.value, conf: fields.remarks?.confidence, method: fields.remarks?.method, review: fields.remarks?.needs_review, exceptions: fields.remarks?.exception_keywords }
                 ];
 
-                fieldKeys.forEach(key => {
-                    const f = fields[key] || { value: null, confidence: null, method: 'NOT_FOUND', needs_review: true };
+                displayCards.forEach(f => {
                     const card = document.createElement('div');
                     card.className = 'field-card';
 
                     const header = document.createElement('div');
                     header.className = 'field-card-header';
-                    header.innerHTML = `<span class="field-label">${key.replace('_', ' ')}</span>`;
+                    header.innerHTML = `<span class="field-label">${f.label}</span>`;
 
-                    if (f.needs_review) {
+                    if (f.review) {
                         const rBadge = document.createElement('span');
                         rBadge.className = 'review-badge';
                         rBadge.textContent = 'REVIEW';
@@ -1025,9 +1025,9 @@
                     }
 
                     const valEl = document.createElement('div');
-                    if (f.value !== null && f.value !== undefined && f.value !== '') {
+                    if (f.val !== null && f.val !== undefined && f.val !== '') {
                         valEl.className = 'field-value';
-                        valEl.textContent = f.value;
+                        valEl.textContent = f.val;
                     } else {
                         valEl.className = 'field-value is-null';
                         valEl.textContent = 'null — not found';
@@ -1036,19 +1036,19 @@
                     const footer = document.createElement('div');
                     footer.className = 'field-footer';
 
-                    if (f.confidence) {
+                    if (f.conf) {
                         let confCls = 'tag-success';
-                        if (f.confidence === 'MEDIUM') confCls = 'tag-warning';
-                        if (f.confidence === 'LOW') confCls = 'tag-error';
-                        footer.innerHTML += `<span class="badge-tag ${confCls}">${f.confidence}</span>`;
+                        if (f.conf === 'MEDIUM') confCls = 'tag-warning';
+                        if (f.conf === 'LOW') confCls = 'tag-error';
+                        footer.innerHTML += `<span class="badge-tag ${confCls}">${f.conf}</span>`;
                     }
 
                     if (f.method && f.method !== 'NOT_FOUND') {
                         footer.innerHTML += `<span class="badge-tag tag-muted">${f.method}</span>`;
                     }
 
-                    if (f.exception_keywords && f.exception_keywords.length > 0) {
-                        footer.innerHTML += `<span class="exception-badge">⚠️ ${f.exception_keywords.join(', ')}</span>`;
+                    if (f.exceptions && f.exceptions.length > 0) {
+                        footer.innerHTML += `<span class="exception-badge">⚠️ ${f.exceptions.join(', ')}</span>`;
                     }
 
                     card.appendChild(header);
@@ -1071,7 +1071,6 @@
                     { label: 'Quality Tier', val: quality.quality_tier || 'N/A' },
                     { label: 'Mean Confidence', val: `${((quality.mean_confidence || 0) * 100).toFixed(1)}%` },
                     { label: 'Rotation Corrected', val: quality.rotation_corrected ? `Yes (${quality.rotation_angle}°)` : 'No' },
-                    { label: 'Stamp Detected', val: quality.stamp_detected ? `Yes (${quality.stamp_count})` : 'No' },
                     { label: 'Low Conf Blocks', val: quality.low_confidence_blocks || 0 },
                     { label: 'TrOCR Fallbacks', val: quality.trocr_fallback_count || 0 }
                 ];
@@ -1082,24 +1081,6 @@
                     card.innerHTML = `<div class="stat-label">${st.label}</div><div class="stat-value">${st.val}</div>`;
                     statsGrid.appendChild(card);
                 });
-
-                const stampList = document.getElementById('stampList');
-                stampList.innerHTML = '';
-                const stampTexts = fullOcr.stamp_texts || [];
-                if (stampTexts.length > 0) {
-                    stampTexts.forEach(txt => {
-                        const li = document.createElement('li');
-                        li.className = 'stamp-item';
-                        li.textContent = txt || '(Unrecognized stamp text)';
-                        stampList.appendChild(li);
-                    });
-                } else {
-                    const li = document.createElement('li');
-                    li.className = 'stamp-item';
-                    li.style.color = 'var(--text-dim)';
-                    li.textContent = 'No stamps isolated or recognized';
-                    stampList.appendChild(li);
-                }
 
                 // --- TAB 3: Full OCR JSON ---
                 document.getElementById('fullJsonViewer').innerHTML = syntaxHighlight(res);
