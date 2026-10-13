@@ -57,3 +57,6 @@ scratch/
 test.png
 test_*.png
 *.pdf
+
+# Binaries
+*.exe
