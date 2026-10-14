@@ -39,9 +39,14 @@ def main():
 
     # Run full pipeline
     result = run_pipeline(str(input_file))
+    total_pages = result.get("total_pages", 1)
+    print(f"=== DOCUMENT SCAN: {total_pages} PAGE(S) PROCESSED ===")
+    if total_pages > 1 and "pages" in result:
+        for p in result["pages"]:
+            print(f"  - Page {p['page_number']}: {len(p.get('extracted_texts', []))} lines, {p.get('total_blocks', 0)} blocks, conf: {((p.get('mean_confidence', 0))*100):.1f}%")
 
     # 1. Print Extracted Texts (one by one, no bboxes or extra metadata)
-    print("=== EXTRACTED TEXTS (ONE BY ONE) ===")
+    print("\n=== EXTRACTED TEXTS (ONE BY ONE) ===")
     extracted_texts = result.get("extracted_texts", [])
     for idx, text in enumerate(extracted_texts, 1):
         print(f"{idx}. {text}")
@@ -54,7 +59,8 @@ def main():
             val = data.get("value")
             conf = data.get("confidence")
             needs_rev = data.get("needs_review")
-            print(f"{field_name}: value={val}, confidence={conf}, needs_review={needs_rev}")
+            page_info = f", page={data.get('found_on_page')}" if data.get('found_on_page') is not None else ""
+            print(f"{field_name}: value={val}, confidence={conf}{page_info}, needs_review={needs_rev}")
         else:
             print(f"{field_name}: {data}")
 

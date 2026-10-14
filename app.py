@@ -23,6 +23,7 @@ except Exception:
 
 import tempfile
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 from flask import Flask, jsonify, render_template, request
 from PIL import Image
 from pipeline import classifier, extractor, ocr, preprocess
@@ -87,20 +88,12 @@ def health():
     })
 
 
-def run_pipeline(file_path: str) -> dict:
-    """Run the end-to-end POD OCR extraction pipeline on a file path (image or PDF).
-
-    Args:
-        file_path: Absolute or relative path to document file.
-
-    Returns:
-        dict: Full extraction response dictionary.
-    """
+def load_document_pages(file_path: str) -> List[Image.Image]:
+    """Load all pages from a document (PDF, multi-frame TIFF, or single image) into RGB PIL Images."""
     ext = Path(file_path).suffix.lower()
 
-    # Load document into PIL Image
     if ext == ".pdf":
-        pil_image = None
+        pages = []
         # 1. Prefer pypdfium2 (self-contained, no external Poppler binary needed on Windows)
         try:
             import pypdfium2 as pdfium
@@ -109,72 +102,174 @@ def run_pipeline(file_path: str) -> dict:
             if len(pdf) == 0:
                 raise ValueError("PDF document contains no renderable pages.")
             scale = 200.0 / 72.0
-            pil_image = pdf[0].render(scale=scale).to_pil().convert("RGB")
+            pages = [
+                pdf[i].render(scale=scale).to_pil().convert("RGB")
+                for i in range(len(pdf))
+            ]
         except Exception:
-            pass
+            pages = []
 
         # 2. Fallback to pdf2image if pypdfium2 is not available
-        if pil_image is None:
+        if not pages:
             try:
                 from pdf2image import convert_from_path
 
                 pdf_images = convert_from_path(file_path, dpi=200)
                 if not pdf_images:
                     raise ValueError("PDF document contains no renderable pages.")
-                pil_image = pdf_images[0].convert("RGB")
+                pages = [img.convert("RGB") for img in pdf_images]
             except Exception as e:
                 raise RuntimeError(
                     f"Unable to render PDF. Please ensure pypdfium2 is installed or Poppler is added to PATH. Error: {e}"
                 )
-    else:
-        with Image.open(file_path) as img:
-            # Handle RGBA/transparency safely by compositing onto a clean white background
-            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-                rgba = img.convert("RGBA")
+        return pages
+
+    # For images (PNG, JPG, TIFF, WEBP)
+    with Image.open(file_path) as img:
+        from PIL import ImageSequence
+
+        raw_frames = list(ImageSequence.Iterator(img))
+        pages = []
+        for frame in raw_frames:
+            if frame.mode in ("RGBA", "LA") or (
+                frame.mode == "P" and "transparency" in frame.info
+            ):
+                rgba = frame.convert("RGBA")
                 white_bg = Image.new("RGB", rgba.size, (255, 255, 255))
                 white_bg.paste(rgba, mask=rgba.split()[3])
-                pil_image = white_bg
+                pages.append(white_bg)
             else:
-                pil_image = img.convert("RGB")
+                pages.append(frame.convert("RGB"))
+        return pages
 
-    # Step a: Preprocessing (rotation correction and resolution cap)
-    preprocessed_image, preprocess_meta = preprocess.preprocess(pil_image)
 
-    # Step b: Two-tier OCR text extraction (PaddleOCR + TrOCR fallback)
-    ocr_result = ocr.extract_text(preprocessed_image)
+def run_pipeline(file_path: str) -> dict:
+    """Run the end-to-end POD OCR extraction pipeline across all pages of a document.
 
-    # Step c: Extract structured logistics fields
-    structured_fields = extractor.extract_fields(
-        ocr_result, preprocessed_image
+    Args:
+        file_path: Absolute or relative path to document file (image or PDF).
+
+    Returns:
+        dict: Full multi-page extraction response dictionary.
+    """
+    import numpy as np
+
+    pages_images = load_document_pages(file_path)
+    total_pages = len(pages_images)
+    if total_pages == 0:
+        raise ValueError("No renderable pages found in document.")
+
+    pages_data = []
+    all_blocks = []
+    all_extracted_texts = []
+    raw_text_parts = []
+    trocr_used_any = False
+    confidences = []
+    low_conf_blocks_total = 0
+    trocr_fallback_count_total = 0
+    rotations = []
+    pages_structured_fields = []
+
+    for page_idx, page_img in enumerate(pages_images, start=1):
+        # Step a: Preprocessing (rotation correction and resolution cap)
+        preprocessed_img, prep_meta = preprocess.preprocess(page_img)
+        rotations.append({
+            "page": page_idx,
+            "rotation_corrected": prep_meta.get("rotation_corrected", False),
+            "rotation_angle": prep_meta.get("rotation_angle", 0),
+        })
+
+        # Step b: Two-tier OCR text extraction
+        page_ocr = ocr.extract_text(preprocessed_img)
+        if page_ocr.get("trocr_used"):
+            trocr_used_any = True
+
+        page_blocks = page_ocr.get("blocks", [])
+        for blk in page_blocks:
+            blk["page"] = page_idx
+            all_blocks.append(blk)
+
+        page_texts = [b["text"] for b in page_blocks if b.get("text")]
+        all_extracted_texts.extend(page_texts)
+
+        if page_ocr.get("raw_text"):
+            page_header = f"--- PAGE {page_idx} ---" if total_pages > 1 else ""
+            if page_header:
+                raw_text_parts.append(page_header)
+            raw_text_parts.append(page_ocr["raw_text"])
+
+        for b in page_blocks:
+            c = float(b.get("confidence", 0.0))
+            confidences.append(c)
+            if c < 0.75:
+                low_conf_blocks_total += 1
+            if b.get("method") == "TROCR_FALLBACK":
+                trocr_fallback_count_total += 1
+
+        # Step c: Extract structured fields for this specific page
+        page_fields = extractor.extract_fields(page_ocr, preprocessed_img)
+        pages_structured_fields.append((page_idx, page_fields))
+
+        pages_data.append({
+            "page_number": page_idx,
+            "extracted_texts": page_texts,
+            "total_blocks": len(page_blocks),
+            "mean_confidence": page_ocr.get("mean_confidence", 0.0),
+            "rotation_corrected": prep_meta.get("rotation_corrected", False),
+            "rotation_angle": prep_meta.get("rotation_angle", 0),
+        })
+
+    # Combined OCR output across all pages
+    combined_raw_text = "\n".join(raw_text_parts)
+    combined_ocr = {
+        "blocks": all_blocks,
+        "raw_text": combined_raw_text,
+    }
+    combined_fields = extractor.extract_fields(combined_ocr)
+
+    # Step d: Intelligent multi-page field merge
+    structured_fields = extractor.merge_multipage_fields(
+        pages_structured_fields, combined_fields
     )
 
-    # Step d: Classify document as delivery document
-    doc_classification = classifier.is_delivery_document(
-        ocr_result["raw_text"]
-    )
+    # Step e: Classify document as delivery document
+    doc_classification = classifier.is_delivery_document(combined_raw_text)
 
-    # Step e: Assess document and extraction quality
+    # Step f: Assess document and extraction quality across all pages
+    mean_confidence = float(np.mean(confidences)) if confidences else 0.0
+    rotation_corrected_any = any(r["rotation_corrected"] for r in rotations)
+    rot_angle = rotations[0]["rotation_angle"] if rotations else 0
+
     quality_assessment = classifier.assess_document_quality(
-        ocr_result, preprocess_meta
+        {
+            "mean_confidence": mean_confidence,
+            "blocks": all_blocks,
+        },
+        {
+            "rotation_corrected": rotation_corrected_any,
+            "rotation_angle": rot_angle,
+        },
     )
-
-    # Clean list of only the extracted texts one by one (no bboxes or confidence scores)
-    extracted_texts = [b["text"] for b in ocr_result.get("blocks", []) if b.get("text")]
+    quality_assessment["total_pages"] = total_pages
+    quality_assessment["pages_rotation"] = rotations
 
     # Assemble response
     return {
         "status": "success",
-        "extracted_texts": extracted_texts,
+        "total_pages": total_pages,
+        "extracted_texts": all_extracted_texts,
+        "pages": pages_data,
         "structured_fields": structured_fields,
         "full_ocr": {
-            "raw_text": ocr_result["raw_text"],
-            "total_blocks": ocr_result["total_blocks"],
-            "mean_confidence": ocr_result["mean_confidence"],
-            "trocr_used": ocr_result["trocr_used"],
-            "ocr_blocks": ocr_result["blocks"],
+            "total_pages": total_pages,
+            "raw_text": combined_raw_text,
+            "total_blocks": len(all_blocks),
+            "mean_confidence": round(mean_confidence, 4),
+            "trocr_used": trocr_used_any,
+            "ocr_blocks": all_blocks,
             "ocr_engine": (
                 "PaddleOCR+TrOCR"
-                if ocr_result["trocr_used"]
+                if trocr_used_any
                 else "PaddleOCR"
             ),
         },

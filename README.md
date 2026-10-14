@@ -16,15 +16,15 @@ The system features **safe RGB preprocessing & deskew**, a **two-tier batched OC
 ```
 +-----------------------------------------------------------------------------------+
 |                              Document Ingestion                                   |
-|       - PDFs: pypdfium2 (self-contained) with pdf2image fallback                 |
-|       - Images: JPG, PNG, WEBP with safe RGBA-to-RGB white-matte compositing      |
+|       - PDFs: Multi-page rendering via pypdfium2 (fallback pdf2image)             |
+|       - Images: Multi-frame & single JPG, PNG, WEBP with safe alpha compositing    |
 +-----------------------------------------------------------------------------------+
                                          |
-                                         v
+                                         v  (Iterate each page 1..N)
 +-----------------------------------------------------------------------------------+
 |                           Document Preprocessing                                  |
-|  - Step 0: Orientation Classification & Deskew (0°, 90°, 180°, 270°)              |
-|  - Step 1: Resolution Capping (1800px longest edge via LANCZOS downsampling)       |
+|  - Per-page Orientation Classification & Deskew (0°, 90°, 180°, 270°)             |
+|  - Resolution Capping (1800px longest edge via LANCZOS downsampling)              |
 |  - Continuous-Tone Clean RGB Preservation (optimal for Deep Learning DBNet)       |
 +-----------------------------------------------------------------------------------+
                                          |
@@ -35,26 +35,19 @@ The system features **safe RGB preprocessing & deskew**, a **two-tier batched OC
 |  - Tier 2 Fallback: Batched TrOCR (microsoft/trocr-base-handwritten)              |
 |    * Accelerated with torch.inference_mode() and token length capping             |
 |    * Evaluates low-confidence handwriting blocks in a single batched tensor pass  |
+|  - Block tagging: Each OCR block is annotated with page index (block.page = N)    |
 +-----------------------------------------------------------------------------------+
                                          |
                     +--------------------+--------------------+
                     |                                         |
                     v                                         v
 +---------------------------------------+ +---------------------------------------+
-|      Structured Field Extraction      | |    Quality & Document Verification    |
-|  - Vehicle / Truck Number             | |  - Keyword Density Delivery Verifier  |
-|  - Date / Delivery Date               | |  - Document Quality Tier (GOOD /      |
-|  - Route (From -> To Locations)       | |    DEGRADED / POOR)                   |
-|  - Freight Breakdown:                 | |  - Automated ERP Recommendation       |
-|    * Total Freight                    | +---------------------------------------+
-|    * Advance Amount                   |
-|    * Balance Amount                   |
-|    * Payable At                       |
-|    * Advance + Balance Reconciliation |
-|  - Consignor (Transporter / Header)   |
-|  - Consignee (M/s. / Bill-To Entity)  |
-|  - Document Type & POD Number         |
-|  - Remarks (17 Exception Keywords)    |
+|   Intelligent Multi-Page Extraction   | |    Quality & Document Verification    |
+|  - Per-page & Cross-page extraction   | |  - Keyword Density Delivery Verifier  |
+|  - Best-field selection by confidence | |  - Multi-page Quality Tier (GOOD /    |
+|  - Multi-page Route & Freight merging | |    DEGRADED / POOR)                   |
+|  - 'found_on_page' source provenance  | |  - Aggregated ERP Recommendation      |
+|  - Exception keywords scanning        | +---------------------------------------+
 +---------------------------------------+
                     |
                     +--------------------+
@@ -62,8 +55,8 @@ The system features **safe RGB preprocessing & deskew**, a **two-tier batched OC
                                          v
 +-----------------------------------------------------------------------------------+
 |                               Output Delivery                                     |
-|  - Web UI: Responsive 5-Tab Dark Dashboard with instant copy & JSON download      |
-|  - REST API: JSON First payload with optional pure text array format              |
+|  - Web UI: Responsive 5-Tab Dark Dashboard with multi-page badges & page tags     |
+|  - REST API: JSON First payload with total_pages, pages metadata & field sources  |
 +-----------------------------------------------------------------------------------+
 ```
 
@@ -71,8 +64,12 @@ The system features **safe RGB preprocessing & deskew**, a **two-tier batched OC
 
 ## Key Features
 
-1. **Pure Text Array JSON First**: Returns an enumerated, cleaned array of all identified text lines in insertion order without bounding box or score clutter.
-2. **Full Logistics Field Extraction**:
+1. **Multi-Page Document Scanning & Cross-Page Consolidation**:
+   - Iterates through **all pages** in multi-page PDFs or multi-frame scans.
+   - Extracts structured fields per page and consolidates them intelligently: prioritizing non-null values, higher confidence (`HIGH > MEDIUM > LOW`), and critical exception flags.
+   - Annotates each extracted field with source provenance metadata: `found_on_page` (e.g. `1`, `2`, `"ALL"`).
+2. **Pure Text Array JSON First**: Returns an enumerated, cleaned array of all identified text lines in insertion order without bounding box or score clutter.
+3. **Full Logistics Field Extraction**:
    - `vehicle_number`: Matches standard Indian commercial & private formats (`WB176302`, `WB-17-6302`, `MH12AB1234`, `DL 01 AB 1234`) with spatial proximity to anchor labels (`TRUCK NO`, `LORRY NO`, `VEHICLE NO`, `WE ARE SENDING TRUCK/TRAILORS NO`).
    - `date`: Tolerant parser matching standard and dot-separated logistics dates (`07/10/2026`, `Date..07/10.1.2026`, `18.07.2026`, `2026-10-07`).
    - `route`: Extracts origin (`from_location`) and destination (`to_location`) from single-line routes (`From Bhubaneshwar To Dankuni`) or separated anchor blocks.
@@ -81,14 +78,14 @@ The system features **safe RGB preprocessing & deskew**, a **two-tier batched OC
    - `consignee`: Extracts bill-to recipient following standard transport anchors like `M/s.` or `Consignee` (`Road Express Freight`).
    - `remarks`: Scans for logistics exceptions across 17 keywords (`damage`, `shortage`, `leak`, `theft`, `broken`, `open`, etc.).
    - **Explicit Null Representation**: Any absent or unrecognized field is clearly serialized as `null`.
-3. **High-Performance Batched TrOCR (30x Speedup)**:
+4. **High-Performance Batched TrOCR (30x Speedup)**:
    - Low-confidence handwritten crops are batched into a single tensor forward pass under `torch.inference_mode()`.
-   - Complex multi-block PDFs process in **~5–15 seconds** (down from 2–3 minutes).
-4. **Startup Engine Pre-Warming**:
+   - Complex multi-page PDFs process in **~5–15 seconds** (down from 2–3 minutes).
+5. **Startup Engine Pre-Warming**:
    - Both PaddleOCR and TrOCR engines are pre-warmed into memory at process boot, eliminating first-request latency spikes and tunnel gateway timeouts.
-5. **Robust Document Ingestion**:
+6. **Robust Document Ingestion**:
    - Supports transparent PNG/RGBA by automatically compositing onto clean white matte backgrounds.
-   - Self-contained PDF rendering via `pypdfium2` with no external OS binary requirements.
+   - Self-contained multi-page PDF rendering via `pypdfium2` with no external OS binary requirements.
 
 ---
 
@@ -236,6 +233,7 @@ curl -X POST http://localhost:5000/extract \
 ```json
 {
   "status": "success",
+  "total_pages": 1,
   "extracted_texts": [
     "LOADING ADVICE",
     "SAHU MOVERS",
@@ -253,19 +251,22 @@ curl -X POST http://localhost:5000/extract \
       "value": "LOADING ADVICE",
       "confidence": "HIGH",
       "method": "KEYWORD_MATCH",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "vehicle_number": {
       "value": "WB176302",
       "confidence": "HIGH",
       "method": "NEAR_LABEL",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "date": {
       "value": "07/10/2026",
       "confidence": "HIGH",
       "method": "REGEX_DATE",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "route": {
       "from_location": "Bhubaneshwar",
@@ -273,19 +274,22 @@ curl -X POST http://localhost:5000/extract \
       "display": "Bhubaneshwar -> Dankuni",
       "confidence": "HIGH",
       "method": "REGEX_ROUTE",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "consignor": {
       "value": "SAHU MOVERS",
       "confidence": "HIGH",
       "method": "HEADER_ENTITY",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "consignee": {
       "value": "Road Express Freight",
       "confidence": "HIGH",
       "method": "NEAR_LABEL",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "freight_details": {
       "total_freight": "17,000",
@@ -294,22 +298,26 @@ curl -X POST http://localhost:5000/extract \
       "payable_at": "15,300",
       "confidence": "HIGH",
       "method": "REGEX_AMOUNTS",
-      "needs_review": false
+      "needs_review": false,
+      "found_on_page": 1
     },
     "pod_number": {
       "value": null,
       "confidence": null,
       "method": "NOT_FOUND",
-      "needs_review": true
+      "needs_review": true,
+      "found_on_page": null
     },
     "remarks": {
       "value": null,
       "confidence": null,
       "method": "NOT_FOUND",
-      "needs_review": true
+      "needs_review": true,
+      "found_on_page": null
     }
   },
   "document_quality": {
+    "total_pages": 1,
     "mean_confidence": 0.9526,
     "quality_tier": "GOOD",
     "low_confidence_blocks": 0,

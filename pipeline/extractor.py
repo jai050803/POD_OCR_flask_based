@@ -699,3 +699,203 @@ def extract_fields(
         "quantity": quantity_field,
         "remarks": remarks_field,
     }
+
+
+def merge_multipage_fields(
+    pages_fields: List[Tuple[int, Dict[str, Any]]],
+    combined_fields: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Merge structured field dictionaries from multiple pages into one coherent record.
+
+    Prioritizes non-null values, higher confidence scores, and exception keywords,
+    attaching 'found_on_page' metadata to each field.
+
+    Args:
+        pages_fields: List of (page_number, fields_dict).
+        combined_fields: Optional fields extracted from combined OCR across all pages.
+
+    Returns:
+        Consolidated structured fields dictionary with 'found_on_page' metadata.
+    """
+    if not pages_fields:
+        return combined_fields or {}
+
+    if len(pages_fields) == 1:
+        page_num, fields = pages_fields[0]
+        res: Dict[str, Any] = {}
+        for k, v in fields.items():
+            if isinstance(v, dict):
+                v_copy = dict(v)
+                if (
+                    v.get("value") is not None
+                    or v.get("from_location") is not None
+                    or v.get("total_freight") is not None
+                ):
+                    v_copy["found_on_page"] = page_num
+                else:
+                    v_copy["found_on_page"] = None
+                res[k] = v_copy
+            else:
+                res[k] = v
+        return res
+
+    CONF_ORDER = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, None: 0}
+    merged: Dict[str, Any] = {}
+
+    def pick_best_field(field_key: str) -> Dict[str, Any]:
+        candidates = []
+        for page_num, fields in pages_fields:
+            f = fields.get(field_key)
+            if isinstance(f, dict) and f.get("value") is not None:
+                candidates.append((page_num, f))
+
+        if not candidates:
+            if combined_fields and isinstance(combined_fields.get(field_key), dict):
+                cf = combined_fields[field_key]
+                if cf.get("value") is not None:
+                    cf_copy = dict(cf)
+                    cf_copy["found_on_page"] = "ALL"
+                    return cf_copy
+            res = _not_found_field()
+            res["found_on_page"] = None
+            return res
+
+        candidates.sort(
+            key=lambda x: CONF_ORDER.get(x[1].get("confidence"), 0), reverse=True
+        )
+
+        if field_key == "remarks":
+            for page_num, f in candidates:
+                if f.get("exception_keywords"):
+                    f_copy = dict(f)
+                    f_copy["found_on_page"] = page_num
+                    return f_copy
+
+        best_page, best_f = candidates[0]
+        f_copy = dict(best_f)
+        f_copy["found_on_page"] = best_page
+        return f_copy
+
+    single_fields = [
+        "document_type",
+        "vehicle_number",
+        "date",
+        "consignor",
+        "consignee",
+        "pod_number",
+        "receiver_name",
+        "quantity",
+        "remarks",
+    ]
+    for key in single_fields:
+        merged[key] = pick_best_field(key)
+
+    # Route merging across pages
+    route_candidates = []
+    for page_num, fields in pages_fields:
+        r = fields.get("route")
+        if isinstance(r, dict) and (r.get("from_location") or r.get("to_location")):
+            route_candidates.append((page_num, r))
+
+    if route_candidates:
+        complete_routes = [
+            (p, r)
+            for p, r in route_candidates
+            if r.get("from_location") and r.get("to_location")
+        ]
+        if complete_routes:
+            best_p, best_r = complete_routes[0]
+            r_copy = dict(best_r)
+            r_copy["found_on_page"] = best_p
+            merged["route"] = r_copy
+        else:
+            from_loc, from_p = None, None
+            to_loc, to_p = None, None
+            for p, r in route_candidates:
+                if not from_loc and r.get("from_location"):
+                    from_loc, from_p = r["from_location"], p
+                if not to_loc and r.get("to_location"):
+                    to_loc, to_p = r["to_location"], p
+
+            disp = f"{from_loc or 'N/A'} -> {to_loc or 'N/A'}"
+            page_label = from_p if from_p == to_p else f"{from_p or '?'},{to_p or '?'}"
+            merged["route"] = {
+                "from_location": from_loc,
+                "to_location": to_loc,
+                "display": disp,
+                "confidence": "MEDIUM",
+                "method": "MULTIPAGE_MERGE",
+                "needs_review": False,
+                "found_on_page": page_label,
+            }
+    else:
+        merged["route"] = {
+            "from_location": None,
+            "to_location": None,
+            "display": None,
+            "confidence": None,
+            "method": "NOT_FOUND",
+            "needs_review": True,
+            "found_on_page": None,
+        }
+
+    # Freight details merging across pages
+    freight_candidates = []
+    for page_num, fields in pages_fields:
+        fd = fields.get("freight_details")
+        if isinstance(fd, dict) and any(
+            fd.get(k) is not None
+            for k in (
+                "total_freight",
+                "advance_amount",
+                "balance_amount",
+                "payable_at",
+            )
+        ):
+            freight_candidates.append((page_num, fd))
+
+    if freight_candidates:
+        freight_candidates.sort(
+            key=lambda x: (
+                sum(
+                    1
+                    for k in (
+                        "total_freight",
+                        "advance_amount",
+                        "balance_amount",
+                        "payable_at",
+                    )
+                    if x[1].get(k) is not None
+                ),
+                CONF_ORDER.get(x[1].get("confidence"), 0),
+            ),
+            reverse=True,
+        )
+        best_p, best_fd = freight_candidates[0]
+        fd_copy = dict(best_fd)
+        fd_copy["found_on_page"] = best_p
+        merged["freight_details"] = fd_copy
+    else:
+        merged["freight_details"] = {
+            "total_freight": None,
+            "advance_amount": None,
+            "balance_amount": None,
+            "payable_at": None,
+            "confidence": None,
+            "method": "NOT_FOUND",
+            "needs_review": True,
+            "found_on_page": None,
+        }
+
+    # Convenience top-level scalar keys
+    merged["truck_number"] = merged["vehicle_number"].get("value")
+    merged["delivery_date"] = merged["date"].get("value")
+    merged["from_location"] = merged["route"].get("from_location")
+    merged["to_location"] = merged["route"].get("to_location")
+    merged["customer_name"] = merged["consignee"].get("value")
+    merged["total_freight"] = merged["freight_details"].get("total_freight")
+    merged["advance_amount"] = merged["freight_details"].get("advance_amount")
+    merged["balance_amount"] = merged["freight_details"].get("balance_amount")
+    merged["payable_at"] = merged["freight_details"].get("payable_at")
+
+    return merged

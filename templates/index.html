@@ -710,6 +710,7 @@
                         <thead>
                             <tr>
                                 <th style="width: 50px;">#</th>
+                                <th style="width: 65px;">Page</th>
                                 <th>Extracted Text</th>
                                 <th style="width: 140px;">Confidence</th>
                                 <th style="width: 160px;">Method</th>
@@ -987,7 +988,9 @@
                 if (quality.quality_tier === 'DEGRADED') qualityBadgeClass = 'tag-warning';
                 if (quality.quality_tier === 'POOR') qualityBadgeClass = 'tag-error';
 
+                const totalPages = res.total_pages || fullOcr.total_pages || 1;
                 const badges = [
+                    { label: 'PAGES', val: `${totalPages} ${totalPages === 1 ? 'PAGE' : 'PAGES'}`, cls: 'tag-accent' },
                     { label: 'ENGINE', val: fullOcr.ocr_engine || 'PaddleOCR', cls: 'tag-accent' },
                     { label: 'CONFIDENCE', val: `${((fullOcr.mean_confidence || 0) * 100).toFixed(1)}%`, cls: 'tag-accent' },
                     { label: 'DOC TYPE', val: docTypeLabel, cls: docTypeBadgeClass },
@@ -1007,18 +1010,18 @@
                 fieldsGrid.innerHTML = '';
 
                 const displayCards = [
-                    { label: 'Vehicle / Truck No', val: fields.vehicle_number?.value || fields.truck_number, conf: fields.vehicle_number?.confidence, method: fields.vehicle_number?.method, review: fields.vehicle_number?.needs_review },
-                    { label: 'Date', val: fields.date?.value || fields.delivery_date, conf: fields.date?.confidence, method: fields.date?.method, review: fields.date?.needs_review },
-                    { label: 'Route', val: fields.route?.display || (fields.route?.from_location ? `${fields.route.from_location} → ${fields.route.to_location}` : null), conf: fields.route?.confidence, method: fields.route?.method, review: fields.route?.needs_review },
-                    { label: 'Total Freight (Rs.)', val: fields.freight_details?.total_freight || fields.total_freight, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: fields.freight_details?.needs_review },
-                    { label: 'Advance Amount (Rs.)', val: fields.freight_details?.advance_amount || fields.advance_amount, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false },
-                    { label: 'Balance Amount (Rs.)', val: fields.freight_details?.balance_amount || fields.balance_amount, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false },
-                    { label: 'Payable At', val: fields.freight_details?.payable_at || fields.payable_at, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false },
-                    { label: 'Consignor / Transporter', val: fields.consignor?.value, conf: fields.consignor?.confidence, method: fields.consignor?.method, review: fields.consignor?.needs_review },
-                    { label: 'Consignee / Recipient', val: fields.consignee?.value || fields.customer_name, conf: fields.consignee?.confidence, method: fields.consignee?.method, review: fields.consignee?.needs_review },
-                    { label: 'Document Type', val: fields.document_type?.value, conf: fields.document_type?.confidence, method: fields.document_type?.method, review: false },
-                    { label: 'POD / Invoice / LR No', val: fields.pod_number?.value, conf: fields.pod_number?.confidence, method: fields.pod_number?.method, review: fields.pod_number?.needs_review },
-                    { label: 'Remarks / Exceptions', val: fields.remarks?.value, conf: fields.remarks?.confidence, method: fields.remarks?.method, review: fields.remarks?.needs_review, exceptions: fields.remarks?.exception_keywords }
+                    { label: 'Vehicle / Truck No', val: fields.vehicle_number?.value || fields.truck_number, conf: fields.vehicle_number?.confidence, method: fields.vehicle_number?.method, review: fields.vehicle_number?.needs_review, page: fields.vehicle_number?.found_on_page },
+                    { label: 'Date', val: fields.date?.value || fields.delivery_date, conf: fields.date?.confidence, method: fields.date?.method, review: fields.date?.needs_review, page: fields.date?.found_on_page },
+                    { label: 'Route', val: fields.route?.display || (fields.route?.from_location ? `${fields.route.from_location} → ${fields.route.to_location}` : null), conf: fields.route?.confidence, method: fields.route?.method, review: fields.route?.needs_review, page: fields.route?.found_on_page },
+                    { label: 'Total Freight (Rs.)', val: fields.freight_details?.total_freight || fields.total_freight, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: fields.freight_details?.needs_review, page: fields.freight_details?.found_on_page },
+                    { label: 'Advance Amount (Rs.)', val: fields.freight_details?.advance_amount || fields.advance_amount, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false, page: fields.freight_details?.found_on_page },
+                    { label: 'Balance Amount (Rs.)', val: fields.freight_details?.balance_amount || fields.balance_amount, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false, page: fields.freight_details?.found_on_page },
+                    { label: 'Payable At', val: fields.freight_details?.payable_at || fields.payable_at, conf: fields.freight_details?.confidence, method: fields.freight_details?.method, review: false, page: fields.freight_details?.found_on_page },
+                    { label: 'Consignor / Transporter', val: fields.consignor?.value, conf: fields.consignor?.confidence, method: fields.consignor?.method, review: fields.consignor?.needs_review, page: fields.consignor?.found_on_page },
+                    { label: 'Consignee / Recipient', val: fields.consignee?.value || fields.customer_name, conf: fields.consignee?.confidence, method: fields.consignee?.method, review: fields.consignee?.needs_review, page: fields.consignee?.found_on_page },
+                    { label: 'Document Type', val: fields.document_type?.value, conf: fields.document_type?.confidence, method: fields.document_type?.method, review: false, page: fields.document_type?.found_on_page },
+                    { label: 'POD / Invoice / LR No', val: fields.pod_number?.value, conf: fields.pod_number?.confidence, method: fields.pod_number?.method, review: fields.pod_number?.needs_review, page: fields.pod_number?.found_on_page },
+                    { label: 'Remarks / Exceptions', val: fields.remarks?.value, conf: fields.remarks?.confidence, method: fields.remarks?.method, review: fields.remarks?.needs_review, exceptions: fields.remarks?.exception_keywords, page: fields.remarks?.found_on_page }
                 ];
 
                 displayCards.forEach(f => {
@@ -1029,12 +1032,26 @@
                     header.className = 'field-card-header';
                     header.innerHTML = `<span class="field-label">${f.label}</span>`;
 
+                    const headerRight = document.createElement('div');
+                    headerRight.style.display = 'flex';
+                    headerRight.style.gap = '6px';
+                    headerRight.style.alignItems = 'center';
+
+                    if (f.page !== undefined && f.page !== null) {
+                        const pageBadge = document.createElement('span');
+                        pageBadge.className = 'badge-tag tag-muted';
+                        pageBadge.textContent = `P.${f.page}`;
+                        headerRight.appendChild(pageBadge);
+                    }
+
                     if (f.review) {
                         const rBadge = document.createElement('span');
                         rBadge.className = 'review-badge';
                         rBadge.textContent = 'REVIEW';
-                        header.appendChild(rBadge);
+                        headerRight.appendChild(rBadge);
                     }
+
+                    header.appendChild(headerRight);
 
                     const valEl = document.createElement('div');
                     if (f.val !== null && f.val !== undefined && f.val !== '') {
@@ -1080,6 +1097,7 @@
                 statsGrid.innerHTML = '';
 
                 const qStats = [
+                    { label: 'Total Pages', val: totalPages },
                     { label: 'Quality Tier', val: quality.quality_tier || 'N/A' },
                     { label: 'Mean Confidence', val: `${((quality.mean_confidence || 0) * 100).toFixed(1)}%` },
                     { label: 'Rotation Corrected', val: quality.rotation_corrected ? `Yes (${quality.rotation_angle}°)` : 'No' },
@@ -1113,7 +1131,8 @@
 
                     tr.innerHTML = `
                         <td style="color: var(--text-dim);">${idx + 1}</td>
-                        <td style="font-weight: 500;">${blk.text || ''}</td>
+                        <td><span class="badge-tag tag-muted">P.${blk.page || 1}</span></td>
+                        <td style="font-weight: 500;">${escapeHtml(blk.text || '')}</td>
                         <td class="conf-cell">
                             <div>${confPct}%</div>
                             <div class="conf-bar-bg">
