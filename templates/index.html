@@ -846,7 +846,13 @@
                         data = JSON.parse(text);
                     } catch (e) {
                         if (text.includes('504') || text.includes('Gateway Timeout') || text.includes('localtunnel')) {
-                            throw new Error('Tunnel gateway timed out (504). Please re-extract or use Ngrok/Direct URL.');
+                            throw new Error('Tunnel gateway timed out (504). Please re-extract or check your tunnel connection.');
+                        }
+                        if (text.includes('524') || text.includes('A timeout occurred') || text.includes('trycloudflare') || text.includes('cloudflare')) {
+                            throw new Error('Cloudflare Tunnel connection dropped or timed out (524). Please restart cloudflared with --protocol http2.');
+                        }
+                        if (text.trim().startsWith('<!DOCTYPE html>') || text.includes('<html')) {
+                            throw new Error('The tunnel returned an HTML error page instead of JSON. The connection dropped or timed out.');
                         }
                         throw new Error(text.length > 200 ? text.substring(0, 200) + '...' : text);
                     }

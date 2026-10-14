@@ -177,8 +177,9 @@ python test_pipeline.py test.png
 ### 1. Cloudflare Tunnel (Instant Free HTTPS Tunnel)
 Run the included `cloudflared.exe` binary in a separate terminal:
 ```powershell
-.\cloudflared.exe tunnel --url http://localhost:5000
+.\cloudflared.exe tunnel --protocol http2 --edge-ip-version 4 --url http://127.0.0.1:5000
 ```
+> **Note**: `--protocol http2` ensures reliable TCP port 443 connectivity (preventing UDP/QUIC packet drops or DNS timeouts on Wi-Fi/home ISPs), and `http://127.0.0.1:5000` avoids Windows IPv6 localhost delays.
 This outputs a high-speed HTTPS link (e.g., `https://xxxx.trycloudflare.com`) accessible from any device worldwide with zero gateway timeouts or password prompts.
 
 ### 2. Ngrok
